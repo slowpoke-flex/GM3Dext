@@ -960,28 +960,24 @@ GM3D features a dedicated, native standalone 3D world editor application (**`GM3
   - Upon play, snapshots current entity state and initializes dynamic rigid bodies in Jolt Physics; entities fall, tumble, bounce, and collide in real-time.
   - Upon reset, restores all entity transforms back to their exact pre-simulation configuration.
 
-### 5. History, Undo/Redo Memory Caps & Atomic Scene Protection (Roadmap Item 1)
-- **Bounded Snapshot History (`SceneHistory.h`)**:
-  - Tracks full scene snapshots (`Scene`) across all user mutations: entity transforms, hierarchy changes, material edits, lighting/fog adjustments, and long continuous terrain sculpting or splatmap painting strokes.
-  - Coalesces continuous drag/brush strokes so a single drag produces one clean Undo step upon mouse release.
-  - Enforces dual memory caps (`max_entries = 64`, `max_bytes = 64 MB`) via `Scene::memory_bytes()`, automatically evicting oldest snapshots when large terrain heightmaps/splatmaps are edited repeatedly.
-- **Atomic Scene Saving & Backup Recovery (`SceneSerializer.cpp`)**:
-  - Writes scene JSON to a temporary `.tmp` sibling file first, flushes the stream, moves any existing target file to `.bak`, and atomically renames `.tmp` to the destination path.
-  - If `SceneSerializer::load_from_file` encounters a corrupted primary file, it automatically falls back to `<filepath>.bak` so user work is never lost.
+### 5. History and scene protection
+- `SceneHistory.h` stores scene snapshots, coalesces active edits and excludes transient physics handles and the scene filepath. The default history budget is an estimated 128 MiB. At least two states and a separate saved-state snapshot are retained, so this is not a strict cap on total memory.
+- Scene and project saves create a temporary file in the destination directory and replace the target with `MoveFileExW`. Failed loads leave the current scene untouched. There is no automatic `.bak` recovery.
+- Scene format version 1 is written; unversioned legacy scenes are accepted, unsupported versions are rejected. The editor prompts for unsaved changes before replacing or closing the scene.
 
 ### 6. Project Registry, Persistent Asset Links, 3D Model Thumbnails & Auto-Relinking (Roadmap Item 2)
 - **Relative Path Persistence (`SceneSerializer.cpp`, `ProjectSerializer.cpp`)**:
-  - All model paths (`Entity::model_path`) and texture paths (`Entity::texture_path`, `Material::albedo_path`, `Material::normal_path`) are serialized relative to the scene or project directory (`gm3d_project.json`), allowing entire project folders to be moved across drives or machines without breaking links.
+  - All model paths (`Entity::model_path`) and texture paths (`Entity::texture_path`, `Material::albedo_path`, `Material::normal_path`) are serialized relative to the scene or project directory (`gm3d_project.json`), when a relative path is possible. Resources outside the project, or on another drive, can still require relinking after a move.
 - **Procedural 3D Wireframe Model Thumbnails & Live File Watcher (`StudioApp.cpp`)**:
   - Generates 96x96 RGBA isometric wireframe preview thumbnails for imported `.obj`/`.glb`/`.gltf` meshes directly from CPU vertex positions (`MeshData::preview_positions`).
   - Automatic filesystem timestamp polling (`std::filesystem::last_write_time`) hot-reloads modified textures and 3D models in place via `MeshManager::replace_mesh` and `TextureManager::replace_texture`.
   - **Auto-Relink Missing Assets**: Scans project/scene directories and `assets/`, `models/`, `textures/` subfolders to automatically repair broken file references.
 
 ### 7. True Scene Hierarchy, Parenting, Groups, Multi-Selection & Alignment Tools (Roadmap Item 3)
-- **Hierarchical Transform Propagation (`TransformHierarchy.h`)**:
+- **Hierarchical Transform Propagation (`TransformMath.h`)**:
   - `Entity::parent_id` and `Entity::is_group` establish parent-child trees of arbitrary depth with cycle detection (`Scene::is_descendant_of`).
   - `ComputeWorldMatrix` and `ComputeWorldTransform` recursively evaluate $M_{\text{world}} = M_{\text{local}} \times M_{\text{parentWorld}}$.
-  - `ComputeLocalTransform` preserves an entity's exact world-space position, orientation, and scale when reparenting via drag-and-drop in the Outliner (`set_entity_parent`).
+  - `ReparentEntityPreservingWorld` verifies the reconstructed world matrix before applying a parent change. Singular transforms and transforms that require shear are rejected with a message.
 - **Multi-Selection & Group Transforms (`StudioApp.cpp`)**:
   - `Ctrl+Click` and `Shift+Click` range selection in the Outliner and 3D Viewport.
   - Multi-entity gizmo manipulation transforms all selected root entities around their shared world pivot using relative matrix deltas ($M_{\text{newWorld}} = M_{\text{oldWorld}} \times M_{\text{pivot}}^{-1} \times M_{\text{newPivot}}$).
@@ -1036,15 +1032,10 @@ GM3D features a dedicated, native standalone 3D world editor application (**`GM3
   - `material_set_alpha(mat_id, alpha_mode, alpha_cutoff)`
   - `material_clear_all()`
 
-### 9. Terrain Material Layers, Splatmap Painting & Regional Dirty-Bounds Updates (Roadmap Item 5)
-- **4-Layer Splatmap Blending (`TerrainSystem.h`, `TerrainSystem.cpp`, `RenderWorld.cpp`)**:
-  - Supports 4 customizable terrain material layers (e.g., Grass, Rock, Sand, Snow), each with RGB color, roughness, and UV micro-detail scale (`TerrainLayer`).
-  - Per-vertex RGBA splatmap weights (`m_splatmap`, 4 floats per vertex, normalized to sum to $1.0$) stored in `Vertex::Joints` and interpolated in `PS_Main` (`input.SplatWeights`) when `MatPresetId == 99`.
-  - Brush mode **Paint Layer (`4`)** paints smooth falloff weights onto the active terrain layer in real time.
-  - Persisted in `scene.json` (`terrain.layers` and `terrain.splatmap`) and exposed to GML (`terrain_set_layer`, `terrain_paint_layer`).
-- **Regional Dirty-Bounds GPU Vertex Updates (`TerrainSystem::apply_brush`, `MeshManager::update_mesh_vertices_region`)**:
-  - Instead of recomputing normals and re-uploading the entire $N \times N$ terrain grid on every brush stroke, `apply_brush` restricts height/splatmap modification and central-difference normal recalculation to the affected bounding box $[x_0 - 1 \dots x_1 + 1] \times [z_0 - 1 \dots z_1 + 1]$.
-  - `MeshManager::update_mesh_vertices_region` issues a partial `ID3D11DeviceContext::UpdateSubresource` call covering only the dirty vertex rows $[z_{\text{min}} \dots z_{\text{max}}]$, making $256 \times 256$ and $512 \times 512$ terrain sculpting instantaneous.
+### 9. Terrain editing
+- Sculpt and paint tools use `TerrainBrush.h`; scene snapshots group brush strokes for Undo. The scene stores height samples, four layer settings and RGBA8 paint weights.
+- `TerrainSystem` updates affected mesh and albedo regions and rebuilds the collider after a stroke. Grayscale PFM import/export is described in `tools/DEV_TOOLS.md`.
+- GameMaker export uses `terrain_apply_edit_data` to restore heights, weights and layer parameters after generation. The generated loader requires matching current extension definitions and DLL; the actual GameMaker LTS round trip remains to be tested.
 
 ### 10. 2-Cascade Directional CSM & 6-Face Omnidirectional Point Light Shadow Atlas (Roadmap Item 6)
 - **Unified Shadow Depth Atlas (`RenderWorld.h`, `RenderWorld.cpp`)**:
@@ -1057,7 +1048,7 @@ GM3D features a dedicated, native standalone 3D world editor application (**`GM3
   - For point lights with `cast_shadow >= 0.5`, selects the dominant axis face of $\vec{L}_{\text{fragToLight}}$, projects into the corresponding atlas tile, and performs a 4-tap PCF comparison with slope-scaled bias.
 - **Editor & C-ABI Controls**:
   - Environment panel controls for Shadow Quality (`Low (1024)`, `Medium (2048)`, `High (4096)`), 2-Cascade CSM toggle, Max Shadowed Point Lights ($0..4$), and per-light `"Cast Shadows"` checkbox.
-  - Exported C-ABI functions: `render_set_shadow_settings(csm_enabled, quality, max_shadow_lights)` and `light_set_point` with `cast_shadow` parameter.
+  - Exported C-ABI functions include `render_set_shadow_settings(enabled, strength, softness, coverage)`, `render_set_shadow_quality(quality, csm_enabled, max_shadow_lights)` and `light_point_set_ex(..., cast_shadow)`.
 
 ### 11. Modular Entity Components, Collider/Animator Editors, Play Isolation & GameMaker LTS Exporter (Roadmap Item 7)
 - **Modular Component Inspector (`StudioApp::draw_inspector_panel`)**:
@@ -1077,32 +1068,21 @@ GM3D features a dedicated, native standalone 3D world editor application (**`GM3
   - Invoked via `File -> Export for GameMaker LTS...` (`Ctrl+E`).
   - Stages all referenced external 3D models and textures into `<export_dir>/assets/`, exports `terrain.pfm` heightmap, writes `<export_dir>/scene_gm3d.json` with precomputed world transforms (`world_position`, `world_rotation`, `world_scale`, `world_quat`), and generates a ready-to-use GML loader script **`scr_gm3d_load_scene.gml`** (`gm3d_load_scene_json`).
 
-### 12. Performance Benchmarks & GMRT (GameMaker Runtime) Ecosystem Analysis (Roadmap Item 8)
-- **Before vs After Engine Performance Benchmarks**:
-  | Subsystem / Operation | Before Optimization | After Optimization | Speedup / Gain |
-  |:---|:---|:---|:---|
-  | **Terrain Brush Stroke ($256 \times 256$ Grid)** | Full $65,536$-vertex CPU normal rebuild + full $2.6\text{ MB}$ `UpdateSubresource` ($\sim 4.8\text{ ms}$/stroke) | Regional dirty-bounds normal recalculation + partial row `UpdateSubresource` ($\sim 0.18\text{ ms}$/stroke) | **$\sim 26\times$ faster** |
-  | **Undo/Redo History on Large Scenes** | Unbounded snapshots (risk of $>1\text{ GB}$ RAM growth during sculpting) | Stroke coalescing + strict $64\text{ MB}$ / $64$-step ring eviction | **Bounded $\le 64\text{ MB}$ RAM** |
-  | **Multi-Material Instanced Rendering** | Per-preset static branching only | Sorted `(mesh_id, material_id, texture_id)` instanced batches with single `DrawIndexedInstanced` per group | **$5,000+$ entities at $240+\text{ FPS}$** |
-  | **Directional & Point Shadows** | Single $2048^2$ sun shadow map ($8.8\text{cm}$ texels), no point light shadows | Single-pass multi-viewport Depth Atlas (2-Cascade CSM + up to $4 \times 6$ cubemap faces) | **2.5x sharper near shadows + omnidirectional point shadows in 1 depth target** |
+### 12. Verification and outstanding work
 
-- **GMRT (New GameMaker Runtime) Open-Source & Licensing Status**:
-  - **Current Status**: Opera / YoYo Games develops **GMRT** (the next-generation C++/LLVM/WebGPU-based GameMaker Runtime replacing the legacy C++ Runner). While portions of the toolchain, HTML5 runner (`GameMaker-HTML5`), and documentation/plugin samples have public repositories on GitHub under YoYoGames, the core native **GMRT C++ runtime source code is proprietary and closed-source** (accessible to registered developers via GameMaker Beta / GMRT preview builds, governed by the proprietary GameMaker End User License Agreement, not an OSI open-source license like MIT/Apache).
-  - **Strategic Advantage of `GM3Dext` + `GM3DStudio`**:
-    - Because `GM3Dext` operates through a clean C-ABI (`extern "C" __cdecl`) and a zero-copy raw byte buffer (`buffer_get_address`), it works seamlessly in **GameMaker LTS (2022/2024/2026)** today *and* transitions with zero architectural lock-in to GMRT's FFI / native buffer interfaces.
-    - All code in `GM3Dext` and `GM3DStudio` is 100% clean-room C++20 using strictly permissive open-source libraries (**Jolt Physics** - MIT, **Dear ImGui / ImGuizmo** - MIT, **cgltf** - MIT, **nlohmann/json** - MIT, **Direct3D 11** - Windows SDK), free from any proprietary runner source restrictions.
+The previous benchmark table was removed: its numbers did not identify a reproducible test scene, hardware or captured measurements. Do not treat performance gains as measured until a fixed scene is profiled before and after changes.
 
+The full development plan is **not complete**. In particular:
+- Compile and run an exported scene in GameMaker LTS with a model, material, painted terrain, light, collider and animation. The generated loader and terrain bridge have native tests but have not passed this end-to-end test.
+- Check resource import, missing-file relinking, material texture clearing and Undo/Redo in the editor, including project moves and narrow window layouts. Review the remaining UI/UX work.
+- Check Play/Stop restoration, hierarchy transforms, shadows and performance on representative scenes. Add missing coverage where necessary.
+- Research current GMRT source availability, licensing and compatibility independently using current official sources. GMRT integration has not been verified and must not be assumed compatible with the LTS extension.
 
+### 13. Developer handoff (2026-10-29)
 
-
-
-
-
-
-
-
-
-
-
-
-
+- Run `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1 -Graphics` from the repository root. It builds the editor and DLL, runs CTest, compares terrain regional updates with full rebuilds on WARP, and runs hidden-window Direct3D smoke checks. See `tools/DEV_TOOLS.md` for individual diagnostics and limitations.
+- Material paths are relative in scene files and resolved on load; missing maps appear in diagnostics and the asset library for relinking. Deleting a material reassigns affected objects and is undoable. Material IDs fit the 16-bit renderer interface.
+- Reparenting preserves the world transform where representable and refuses invalid, singular or shear-producing cases. Deep hierarchy traversal is cycle guarded.
+- Imported glTF skins with more than 128 joints are rejected because the GPU bone buffer has 128 entries. Loop-disabled animation samples clamp to the final frame. Visual animation and shadow verification remains outstanding.
+- GameMaker export asks for a folder and warns before replacing scene, loader or terrain files. It checks missing resources, but external glTF dependencies are not packaged; use a self-contained GLB. Export is not fully transactional and failures after writing begins can leave a partial package.
+- `build/`, DLLs, logs and `scratch/` are ignored by Git. Rebuild the DLL and copy it to the example project when needed; `tools/check.ps1` does not copy it automatically. Never assume a local ignored DLL was pushed.
