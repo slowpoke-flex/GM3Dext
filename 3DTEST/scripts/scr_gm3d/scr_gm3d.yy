@@ -1,0 +1,13 @@
+{
+  "$GMScript":"v1",
+  "%Name":"scr_gm3d",
+  "isCompatibility":false,
+  "isDnD":false,
+  "name":"scr_gm3d",
+  "parent":{
+    "name":"3DTEST",
+    "path":"3DTEST.yyp"
+  },
+  "resourceType":"GMScript",
+  "resourceVersion":"2.0"
+}

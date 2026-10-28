@@ -1,0 +1,5 @@
+node_modules
+*claude*
+.vscode
+.docs-index-cache.json
+*.tgz

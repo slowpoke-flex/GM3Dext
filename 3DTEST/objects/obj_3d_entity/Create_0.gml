@@ -1,0 +1,13 @@
+z = 0;
+qx = 0;
+qy = 0;
+qz = 0;
+qw = 1;
+image_xscale = 1;
+image_yscale = 1;
+image_zscale = 1;
+mesh_id = 0;
+material_id = 0;
+texture_id = GM3D_TEX_DEFAULT;
+flags = GM3D_FLAG_ACTIVE;
+physics_body_id = 0;
