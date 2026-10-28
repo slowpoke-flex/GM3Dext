@@ -137,6 +137,9 @@ uint32_t TerrainSystem::generate(ID3D11Device* device, ID3D11DeviceContext* cont
     }
 
     if (heights && heights->size() == m_heights.size()) m_heights = *heights;
+    if (!m_splatmap.empty() && m_splatmap.size() != static_cast<size_t>(N) * N * 4) {
+        m_splatmap.clear();
+    }
     update_mesh(device, mesh_mgr);
 
     update_albedo(device, context, tex_mgr, -W * 0.5f, -W * 0.5f, W * 0.5f, W * 0.5f, true);
@@ -171,6 +174,18 @@ bool TerrainSystem::update_albedo(ID3D11Device* device, ID3D11DeviceContext* con
     if (right <= left || bottom <= top) return false;
     const uint32_t region_width = right - left;
     std::vector<uint8_t> albedo_rgba(static_cast<size_t>(region_width) * (bottom - top) * 4);
+
+    const bool has_splat = (m_splatmap.size() == static_cast<size_t>(N) * N * 4);
+    TerrainLayer default_layers[4] = {
+        { { 0.22f, 0.36f, 0.15f }, 0.78f, 1.0f },
+        { { 0.38f, 0.36f, 0.34f }, 0.85f, 1.0f },
+        { { 0.80f, 0.73f, 0.52f }, 0.65f, 1.0f },
+        { { 0.46f, 0.43f, 0.39f }, 0.70f, 1.5f }
+    };
+    for (size_t i = 0; i < 4 && i < m_layers.size(); ++i) {
+        default_layers[i] = m_layers[i];
+    }
+
     for (uint32_t ty = top; ty < bottom; ++ty) {
         for (uint32_t tx = left; tx < right; ++tx) {
             const float u = static_cast<float>(tx) / static_cast<float>(TEX_SIZE - 1);
@@ -294,6 +309,76 @@ bool TerrainSystem::update_albedo(ID3D11Device* device, ID3D11DeviceContext* con
                 b = mix(b, pl_b, plaza_t);
             }
 
+            // 3.5 Blend User-Painted Terrain Material Layers (Splatmap)
+            if (has_splat) {
+                const float gx = u * static_cast<float>(N - 1);
+                const float gy = v * static_cast<float>(N - 1);
+                const uint32_t x0 = std::min(static_cast<uint32_t>(gx), N - 2);
+                const uint32_t y0 = std::min(static_cast<uint32_t>(gy), N - 2);
+                const uint32_t x1 = x0 + 1;
+                const uint32_t y1 = y0 + 1;
+                const float fx = gx - static_cast<float>(x0);
+                const float fy = gy - static_cast<float>(y0);
+
+                const size_t i00 = (static_cast<size_t>(y0) * N + x0) * 4;
+                const size_t i10 = (static_cast<size_t>(y0) * N + x1) * 4;
+                const size_t i01 = (static_cast<size_t>(y1) * N + x0) * 4;
+                const size_t i11 = (static_cast<size_t>(y1) * N + x1) * 4;
+
+                float weights[4] = {};
+                float painted_sum = 0.0f;
+                for (int c = 0; c < 4; ++c) {
+                    const float w00 = static_cast<float>(m_splatmap[i00 + c]) / 255.0f;
+                    const float w10 = static_cast<float>(m_splatmap[i10 + c]) / 255.0f;
+                    const float w01 = static_cast<float>(m_splatmap[i01 + c]) / 255.0f;
+                    const float w11 = static_cast<float>(m_splatmap[i11 + c]) / 255.0f;
+                    const float w0 = w00 * (1.0f - fx) + w10 * fx;
+                    const float w1 = w01 * (1.0f - fx) + w11 * fx;
+                    weights[c] = w0 * (1.0f - fy) + w1 * fy;
+                    painted_sum += weights[c];
+                }
+
+                if (painted_sum > 0.001f) {
+                    float pr = 0.0f, pg = 0.0f, pb = 0.0f;
+                    for (int c = 0; c < 4; ++c) {
+                        if (weights[c] <= 0.0001f) continue;
+                        const float nw = weights[c] / painted_sum;
+                        float lr = default_layers[c].color[0];
+                        float lg = default_layers[c].color[1];
+                        float lb = default_layers[c].color[2];
+                        const float lscale = std::max(0.1f, default_layers[c].scale);
+
+                        if (c == 0) {
+                            // Grass / foliage organic variation
+                            const float var = 0.92f + 0.12f * n1 + 0.05f * n2;
+                            lr *= var; lg *= var; lb *= var;
+                        } else if (c == 1) {
+                            // Cliff / rock strata detail
+                            const float var = (0.90f + 0.10f * n2) * strata_factor;
+                            lr *= var; lg *= var; lb *= var;
+                        } else if (c == 2) {
+                            // Sand / soil fine grain
+                            const float var = 0.94f + 0.08f * n1 + 0.04f * n_grain;
+                            lr *= var; lg *= var; lb *= var;
+                        } else {
+                            // Cobblestone / tiled path
+                            const float cgx = std::abs(std::fmod(std::abs(worldX) * 0.65f * lscale, 1.0f) - 0.5f);
+                            const float cgz = std::abs(std::fmod(std::abs(worldZ) * 0.65f * lscale, 1.0f) - 0.5f);
+                            const float mortar = 1.0f - smoothstep(0.015f, 0.05f, std::min(cgx, cgz));
+                            const float stone_tint = (1.0f - mortar * 0.22f) * (0.94f + 0.12f * n_grain);
+                            lr *= stone_tint; lg *= stone_tint; lb *= stone_tint;
+                        }
+                        pr += lr * nw;
+                        pg += lg * nw;
+                        pb += lb * nw;
+                    }
+                    const float blend_t = std::clamp(painted_sum, 0.0f, 1.0f);
+                    r = mix(r, pr, blend_t);
+                    g = mix(g, pg, blend_t);
+                    b = mix(b, pb, blend_t);
+                }
+            }
+
             // 4. Apply Multi-Scale Cavity Ambient Occlusion Shading
             r *= cavity;
             g *= cavity;
@@ -316,7 +401,7 @@ bool TerrainSystem::update_mesh(ID3D11Device* device, MeshManager& mesh_mgr) {
     const float W = m_config.world_size;
     const float half_w = W * 0.5f;
     const float cell_size = W / static_cast<float>(N - 1);
-    std::vector<Vertex3D> vertices(N * N);
+    m_vertices.resize(static_cast<size_t>(N) * N);
 
     for (uint32_t y = 0; y < N; ++y) {
         for (uint32_t x = 0; x < N; ++x) {
@@ -352,37 +437,107 @@ bool TerrainSystem::update_mesh(ID3D11Device* device, MeshManager& mesh_mgr) {
             }
 
             // UV mapping: 1.0 UV maps across the terrain, with high-res texture repetition
-            vertices[idx] = Vertex3D(posX, posY, posZ, normX, normY, normZ, u, v);
+            m_vertices[idx] = Vertex3D(posX, posY, posZ, normX, normY, normZ, u, v);
         }
     }
 
-    std::vector<uint32_t> indices;
-    indices.reserve((N - 1) * (N - 1) * 6);
-    for (uint32_t y = 0; y < N - 1; ++y) {
-        for (uint32_t x = 0; x < N - 1; ++x) {
-            uint32_t i0 = y * N + x;
-            uint32_t i1 = y * N + (x + 1);
-            uint32_t i2 = (y + 1) * N + x;
-            uint32_t i3 = (y + 1) * N + (x + 1);
+    const size_t expected_indices = static_cast<size_t>(N - 1) * (N - 1) * 6;
+    if (m_indices.size() != expected_indices) {
+        m_indices.clear();
+        m_indices.reserve(expected_indices);
+        for (uint32_t y = 0; y < N - 1; ++y) {
+            for (uint32_t x = 0; x < N - 1; ++x) {
+                uint32_t i0 = y * N + x;
+                uint32_t i1 = y * N + (x + 1);
+                uint32_t i2 = (y + 1) * N + x;
+                uint32_t i3 = (y + 1) * N + (x + 1);
 
-            indices.push_back(i0);
-            indices.push_back(i2);
-            indices.push_back(i1);
+                m_indices.push_back(i0);
+                m_indices.push_back(i2);
+                m_indices.push_back(i1);
 
-            indices.push_back(i1);
-            indices.push_back(i2);
-            indices.push_back(i3);
+                m_indices.push_back(i1);
+                m_indices.push_back(i2);
+                m_indices.push_back(i3);
+            }
         }
     }
 
-    return mesh_mgr.set_mesh(device, TERRAIN_MESH_ID, vertices, indices);
+    return mesh_mgr.set_mesh(device, TERRAIN_MESH_ID, m_vertices, m_indices);
+}
 
+bool TerrainSystem::update_mesh_region(ID3D11Device* device, ID3D11DeviceContext* context, MeshManager& mesh_mgr,
+                                       float min_x, float min_z, float max_x, float max_z) {
+    if (!device || m_heights.empty()) return false;
+    const uint32_t N = m_config.grid_size;
+    if (!context || m_vertices.size() != static_cast<size_t>(N) * N) {
+        return update_mesh(device, mesh_mgr);
+    }
+
+    const float W = m_config.world_size;
+    const float half_w = W * 0.5f;
+    const float cell_size = W / static_cast<float>(N - 1);
+
+    // Expand dirty bounds by 2 cells in each direction so central-difference normals of neighbors are always updated
+    const int32_t gx0 = std::clamp(static_cast<int32_t>(std::floor((min_x + half_w) / cell_size)) - 2, 0, static_cast<int32_t>(N) - 1);
+    const int32_t gx1 = std::clamp(static_cast<int32_t>(std::ceil((max_x + half_w) / cell_size)) + 2, 0, static_cast<int32_t>(N) - 1);
+    const int32_t gz0 = std::clamp(static_cast<int32_t>(std::floor((min_z + half_w) / cell_size)) - 2, 0, static_cast<int32_t>(N) - 1);
+    const int32_t gz1 = std::clamp(static_cast<int32_t>(std::ceil((max_z + half_w) / cell_size)) + 2, 0, static_cast<int32_t>(N) - 1);
+    if (gx0 > gx1 || gz0 > gz1) return false;
+
+    for (int32_t y = gz0; y <= gz1; ++y) {
+        for (int32_t x = gx0; x <= gx1; ++x) {
+            const size_t idx = static_cast<size_t>(y) * N + x;
+            m_vertices[idx].y = m_heights[idx];
+
+            const int32_t lx = std::max(0, x - 1);
+            const int32_t rx = std::min(static_cast<int32_t>(N) - 1, x + 1);
+            const int32_t dy_idx = std::max(0, y - 1);
+            const int32_t uy_idx = std::min(static_cast<int32_t>(N) - 1, y + 1);
+
+            const float hL = m_heights[static_cast<size_t>(y) * N + lx];
+            const float hR = m_heights[static_cast<size_t>(y) * N + rx];
+            const float hD = m_heights[static_cast<size_t>(dy_idx) * N + x];
+            const float hU = m_heights[static_cast<size_t>(uy_idx) * N + x];
+
+            const float dX = (rx - lx) * cell_size;
+            const float dZ = (uy_idx - dy_idx) * cell_size;
+
+            float normX = -(hR - hL) / dX;
+            float normY = 1.0f;
+            float normZ = -(hU - hD) / dZ;
+
+            const float len = std::sqrt(normX * normX + normY * normY + normZ * normZ);
+            if (len > 0.0001f) {
+                normX /= len; normY /= len; normZ /= len;
+            }
+
+            m_vertices[idx].nx = normX;
+            m_vertices[idx].ny = normY;
+            m_vertices[idx].nz = normZ;
+        }
+    }
+
+    const uint32_t start_vertex = static_cast<uint32_t>(gz0) * N;
+    const uint32_t vertex_count = static_cast<uint32_t>(gz1 - gz0 + 1) * N;
+    if (!mesh_mgr.update_mesh_vertices(context, TERRAIN_MESH_ID, m_vertices, start_vertex, vertex_count)) {
+        return update_mesh(device, mesh_mgr);
+    }
+    return true;
 }
 
 bool TerrainSystem::replace_heights(const std::vector<float>& heights) {
     if (heights.size() != m_heights.size() || heights.empty()) return false;
     m_heights = heights;
     return true;
+}
+
+void TerrainSystem::set_layers(const std::vector<TerrainLayer>& layers) {
+    m_layers = layers;
+}
+
+void TerrainSystem::set_splatmap(const std::vector<uint8_t>& splatmap) {
+    m_splatmap = splatmap;
 }
 
 void TerrainSystem::update_collider(PhysicsWorld& physics_world) {
@@ -395,6 +550,9 @@ void TerrainSystem::clear(PhysicsWorld& physics_world) {
     if (m_physics_body_id) physics_world.destroy_body(m_physics_body_id);
     m_physics_body_id = 0;
     m_heights.clear();
+    m_vertices.clear();
+    m_indices.clear();
+    m_splatmap.clear();
     m_generated = false;
 }
 
@@ -450,7 +608,9 @@ void TerrainSystem::get_normal(float world_x, float world_z, float& out_nx, floa
         out_ny = ny / len;
         out_nz = nz / len;
     } else {
-        out_nx = 0.0f; out_ny = 1.0f; out_nz = 0.0f;
+        out_nx = 0.0f;
+        out_ny = 1.0f;
+        out_nz = 0.0f;
     }
 }
 

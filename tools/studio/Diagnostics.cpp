@@ -42,6 +42,11 @@ std::vector<Diagnostic> validate_scene(const Scene& scene) {
         if (entity.physics_type != 0 && entity.collider_shape == 4)
             out.push_back({false, "collider", "Mesh collider is not implemented; editor simulation uses a cylinder: " + label});
     }
+    for (const auto& material : scene.materials) {
+        const auto label = "Material " + material.name + " (ID " + std::to_string(material.id) + ")";
+        asset_check(out, material.albedo_path, label + " albedo");
+        asset_check(out, material.normal_path, label + " normal");
+    }
 
     // Validate hierarchy parent references and cycle detection
     for (const auto& entity : scene.entities) {

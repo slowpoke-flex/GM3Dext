@@ -25,21 +25,22 @@ struct RenderConfig {
 
 // Shader Constant Buffer matching HLSL SceneConstants register(b0)
 struct alignas(16) SceneConstantBuffer {
-    float view_proj[16];       // 64 bytes
-    float light_view_proj[16]; // 64 bytes
-    float camera_pos[3];       // 12 bytes
-    float time;                // 4 bytes (simulation time in seconds)
-    float sun_dir[3];          // 12 bytes
-    float pad1;                // 4 bytes
-    float sun_color[3];        // 12 bytes
-    float pad2;                // 4 bytes
-    float ambient_color[3];    // 12 bytes
-    float pad3;                // 4 bytes
-    float fog_color[3];        // 12 bytes
-    float fog_start;           // 4 bytes
-    float fog_end;             // 4 bytes
-    float pad_fog[3];          // 12 bytes
-    float inv_view_proj[16];   // 64 bytes
+    float view_proj[16];          // 64 bytes
+    float light_view_proj[16];    // 64 bytes (Cascade 0 Near Sun ViewProj)
+    float camera_pos[3];          // 12 bytes
+    float time;                   // 4 bytes (simulation time in seconds)
+    float sun_dir[3];             // 12 bytes
+    float pad1;                   // 4 bytes (ShadowStrength)
+    float sun_color[3];           // 12 bytes
+    float pad2;                   // 4 bytes (ShadowSoftness)
+    float ambient_color[3];       // 12 bytes
+    float pad3;                   // 4 bytes (ShadowAtlasSize)
+    float fog_color[3];           // 12 bytes
+    float fog_start;              // 4 bytes
+    float fog_end;                // 4 bytes
+    float pad_fog[3];             // 12 bytes (pad_fog[0] = CSM enabled flag)
+    float inv_view_proj[16];      // 64 bytes
+    float light_view_proj_c1[16]; // 64 bytes (Cascade 1 Far Sun ViewProj)
 };
 
 // Shader Constant Buffer matching HLSL LightConstants register(b2)
@@ -51,7 +52,9 @@ struct alignas(16) GPULightConstants {
         float intensity;
     } lights[16];
     int32_t point_light_count = 0;
-    float pad[3] = {0, 0, 0};
+    int32_t max_shadow_lights = 4;
+    float pad[2] = {0, 0};
+    int32_t shadow_slots[16] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 };
 
 // Shader Constant Buffer matching HLSL MaterialConstants register(b3)
@@ -93,16 +96,18 @@ public:
     bool set_normal_map(uint16_t target_tex_id, uint16_t normal_tex_id);
 
     // Dynamic PBR Materials
-    void set_material_properties(uint16_t id, const MaterialGPU& props, uint16_t albedo_tex = 0, uint16_t normal_tex = 0);
+    void set_material_properties(uint16_t id, const MaterialGPU& props);
+    void set_material_properties(uint16_t id, const MaterialGPU& props, uint16_t albedo_tex, uint16_t normal_tex);
     void clear_materials();
     const MaterialGPU* get_material_properties(uint16_t id) const;
 
     // Lighting & Atmosphere Controls
     void set_sun_light(float dx, float dy, float dz, float r, float g, float b, float intensity);
     void set_ambient_light(float r, float g, float b, float intensity);
-    void set_point_light(uint32_t index, float x, float y, float z, float radius, float r, float g, float b, float intensity);
+    void set_point_light(uint32_t index, float x, float y, float z, float radius, float r, float g, float b, float intensity, bool cast_shadow = true);
     void clear_point_lights();
     void set_shadow_settings(bool enabled, float strength, float softness, float coverage);
+    void set_shadow_quality(int quality, bool csm_enabled = true, int max_shadow_lights = 4);
     void set_sky_color(float r, float g, float b);
     void set_fog(float start, float end, float r = -1.0f, float g = -1.0f, float b = -1.0f);
 
@@ -138,6 +143,9 @@ public:
     // Procedural Terrain System
     uint32_t generate_terrain(uint32_t grid_size, float world_size, float height_scale, uint32_t seed, PhysicsWorld& physics_world, const std::vector<float>* heights = nullptr);
     bool update_terrain_mesh() { return m_terrain_system.update_mesh(m_device.Get(), m_mesh_manager); }
+    bool update_terrain_mesh_region(float min_x, float min_z, float max_x, float max_z) {
+        return m_terrain_system.update_mesh_region(m_device.Get(), m_context.Get(), m_mesh_manager, min_x, min_z, max_x, max_z);
+    }
     float get_terrain_height(float world_x, float world_z) const;
 
     // Studio & Editor Accessors
@@ -171,8 +179,14 @@ private:
     ComPtr<ID3D11DepthStencilState> m_gizmo_depth_stencil_state;
     ComPtr<ID3D11RasterizerState>   m_rasterizer_state;
 
-    // Real-Time Directional Shadow Mapping (2048x2048 Hardware PCF)
-    static constexpr UINT SHADOW_MAP_SIZE = 2048;
+    // Real-Time Cascaded Sun & Omnidirectional Point Light Shadow Atlas
+    static constexpr UINT SHADOW_MAP_SIZE = 4096;
+    UINT m_shadow_atlas_size = 4096;
+    int m_shadow_quality = 2; // 0 = Low (1024), 1 = Medium (2048), 2 = High (4096)
+    bool m_csm_enabled = true;
+    int m_max_shadow_lights = 4;
+    bool m_point_light_cast_shadow[16] = {};
+    SceneConstantBuffer m_cached_scene_cb{};
     ComPtr<ID3D11Texture2D>          m_shadow_texture;
     ComPtr<ID3D11DepthStencilView>   m_shadow_dsv;
     ComPtr<ID3D11ShaderResourceView> m_shadow_srv;
@@ -180,6 +194,7 @@ private:
     ComPtr<ID3D11RasterizerState>    m_shadow_rasterizer_state;
     ComPtr<ID3D11DepthStencilState>  m_shadow_depth_stencil_state;
     ComPtr<ID3D11VertexShader>       m_shadow_vertex_shader;
+    bool create_shadow_atlas(UINT atlas_size);
 
     // Shaders & Input Layout
     ComPtr<ID3D11VertexShader>     m_vertex_shader;

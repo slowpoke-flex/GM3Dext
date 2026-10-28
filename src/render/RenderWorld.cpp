@@ -19,12 +19,13 @@ cbuffer SceneConstants : register(b0) {
     float3 SunColor;
     float ShadowSoftness;
     float3 AmbientColor;
-    float pad3;
+    float ShadowAtlasSize;
     float3 FogColor;
     float FogStart;
     float FogEnd;
     float3 PadFog;
     row_major float4x4 InvViewProj;
+    row_major float4x4 LightViewProjCascade1;
 };
 
 cbuffer BoneConstants : register(b1) {
@@ -41,7 +42,9 @@ struct PointLightData {
 cbuffer LightConstants : register(b2) {
     PointLightData PointLights[16];
     int PointLightCount;
-    float3 PadLight;
+    int MaxShadowLights;
+    float2 PadLight;
+    int4 PointLightShadowSlots[4];
 };
 
 cbuffer MaterialConstants : register(b3) {
@@ -114,39 +117,13 @@ PS_INPUT VS_Main(VS_INPUT input) {
     return output;
 }
 
-float CalculateShadow(float3 worldPos, float3 geomNormal, float3 L, float2 screenPos) {
-    if (ShadowStrength <= 0.0f) return 1.0f;
-    float NdotL = max(dot(geomNormal, L), 0.0f);
-
-    // Normal offset bias pushes shadow coordinate along surface normal
-    // proportional to the slope (grazing angles require more normal offset to avoid acne)
-    float normalBias = 0.055f * saturate(1.0f - NdotL);
-    float3 biasedWorldPos = worldPos + geomNormal * normalBias;
-
-    float4 shadowPos = mul(float4(biasedWorldPos, 1.0f), LightViewProj);
-    float3 projCoords = shadowPos.xyz / shadowPos.w;
-
-    // Map NDC [-1, 1] to UV [0, 1]
-    float2 shadowUV = float2(projCoords.x * 0.5f + 0.5f, -projCoords.y * 0.5f + 0.5f);
-    float currentDepth = projCoords.z;
-
-    if (shadowUV.x < 0.001f || shadowUV.x > 0.999f || shadowUV.y < 0.001f || shadowUV.y > 0.999f || currentDepth > 1.0f || currentDepth < 0.0f) {
-        return 1.0f;
-    }
-
-    // Smooth penumbra fade at the edges of the shadow frustum
-    float borderFade = saturate(min(
-        min(shadowUV.x, 1.0f - shadowUV.x),
-        min(shadowUV.y, 1.0f - shadowUV.y)
-    ) * 14.0f);
-
-    // Tight slope-scaled depth bias (normal offset already handles slope geometry)
-    float depthBias = max(0.00028f * (1.0f - NdotL), 0.00007f);
-
-    // 16-Tap Vogel Disk PCF (Fermat Spiral with Golden Ratio Angle)
-    // Circularly isotropic sample distribution provides smooth, solid penumbras without stipple noise
-    float2 texelSize = float2(1.0f / 2048.0f, 1.0f / 2048.0f);
-    float filterRadius = max(0.5f, ShadowSoftness);
+float SampleSunCascade(float2 cascadeUV, float currentDepth, float depthBias, float cascadeOffsetX, float filterRadius) {
+    float2 atlasUV = float2(cascadeOffsetX + clamp(cascadeUV.x, 0.002f, 0.998f) * 0.5f,
+                            clamp(cascadeUV.y, 0.002f, 0.998f) * 0.5f);
+    float2 tileMin = float2(cascadeOffsetX + 0.001f, 0.001f);
+    float2 tileMax = float2(cascadeOffsetX + 0.499f, 0.499f);
+    float texel = 1.0f / max(ShadowAtlasSize, 1024.0f);
+    float2 texelSize = float2(texel, texel);
 
     static const float2 c_vogel_disk[16] = {
         float2( 0.176777f,  0.000000f),
@@ -170,11 +147,121 @@ float CalculateShadow(float3 worldPos, float3 geomNormal, float3 L, float2 scree
     float shadow = 0.0f;
     [unroll]
     for (int i = 0; i < 16; ++i) {
-        shadow += ShadowMap.SampleCmpLevelZero(ShadowSampler, shadowUV + c_vogel_disk[i] * (filterRadius * texelSize), currentDepth - depthBias);
+        float2 sampleUV = clamp(atlasUV + c_vogel_disk[i] * (filterRadius * texelSize), tileMin, tileMax);
+        shadow += ShadowMap.SampleCmpLevelZero(ShadowSampler, sampleUV, currentDepth - depthBias);
     }
-    shadow *= (1.0f / 16.0f);
+    return shadow * (1.0f / 16.0f);
+}
 
-    return lerp(1.0f, shadow, borderFade * saturate(ShadowStrength));
+float CalculateShadow(float3 worldPos, float3 geomNormal, float3 L, float2 screenPos) {
+    if (ShadowStrength <= 0.0f) return 1.0f;
+    float NdotL = max(dot(geomNormal, L), 0.0f);
+
+    float normalBias = 0.055f * saturate(1.0f - NdotL);
+    float3 biasedWorldPos = worldPos + geomNormal * normalBias;
+
+    float4 shadowPos0 = mul(float4(biasedWorldPos, 1.0f), LightViewProj);
+    float3 proj0 = shadowPos0.xyz / shadowPos0.w;
+    float2 uv0 = float2(proj0.x * 0.5f + 0.5f, -proj0.y * 0.5f + 0.5f);
+    float depth0 = proj0.z;
+    float edge0 = max(abs(proj0.x), abs(proj0.y));
+    bool valid0 = (edge0 < 0.996f && depth0 >= 0.0f && depth0 <= 1.0f);
+
+    float depthBias0 = max(0.00028f * (1.0f - NdotL), 0.00007f);
+    float filterRadius = max(0.5f, ShadowSoftness);
+
+    if (PadFog.x < 0.5f) {
+        // Single-cascade mode
+        if (!valid0) return 1.0f;
+        float borderFade0 = saturate((1.0f - edge0) * 7.0f);
+        float shadow0 = SampleSunCascade(uv0, depth0, depthBias0, 0.0f, filterRadius);
+        return lerp(1.0f, shadow0, borderFade0 * saturate(ShadowStrength));
+    }
+
+    // 2-Cascade CSM mode (Cascade 0 = Near, Cascade 1 = Far)
+    if (valid0 && edge0 < 0.76f) {
+        float shadow0 = SampleSunCascade(uv0, depth0, depthBias0, 0.0f, filterRadius);
+        return lerp(1.0f, shadow0, saturate(ShadowStrength));
+    }
+
+    float3 biasedWorldPos1 = worldPos + geomNormal * (normalBias * 2.2f);
+    float4 shadowPos1 = mul(float4(biasedWorldPos1, 1.0f), LightViewProjCascade1);
+    float3 proj1 = shadowPos1.xyz / shadowPos1.w;
+    float2 uv1 = float2(proj1.x * 0.5f + 0.5f, -proj1.y * 0.5f + 0.5f);
+    float depth1 = proj1.z;
+    float edge1 = max(abs(proj1.x), abs(proj1.y));
+    bool valid1 = (edge1 < 0.996f && depth1 >= 0.0f && depth1 <= 1.0f);
+    if (!valid0 && !valid1) return 1.0f;
+
+    float depthBias1 = depthBias0 * 2.2f;
+    float shadow1 = valid1 ? SampleSunCascade(uv1, depth1, depthBias1, 0.5f, filterRadius * 0.85f) : 1.0f;
+    float borderFade1 = valid1 ? saturate((1.0f - edge1) * 7.0f) : 0.0f;
+    shadow1 = lerp(1.0f, shadow1, borderFade1);
+
+    if (valid0) {
+        float shadow0 = SampleSunCascade(uv0, depth0, depthBias0, 0.0f, filterRadius);
+        float blendT = smoothstep(0.76f, 0.98f, edge0);
+        float combined = lerp(shadow0, shadow1, blendT);
+        return lerp(1.0f, combined, saturate(ShadowStrength));
+    }
+    return lerp(1.0f, shadow1, saturate(ShadowStrength));
+}
+
+float CalculatePointLightShadow(int shadowSlot, float3 lightPos, float lightRadius, float3 worldPos, float3 geomNormal) {
+    if (shadowSlot < 0 || ShadowStrength <= 0.0f) return 1.0f;
+    float3 toLight = lightPos - worldPos;
+    float dist = length(toLight);
+    if (dist <= 0.18f || dist >= lightRadius) return 1.0f;
+    float3 Lp = toLight / dist;
+    float NdotL = max(dot(geomNormal, Lp), 0.0f);
+    float3 biasedPos = worldPos + geomNormal * (0.045f * saturate(1.0f - NdotL) + 0.01f);
+    float3 rel = biasedPos - lightPos;
+    float3 absRel = abs(rel);
+
+    float ma = 1.0f, sc = 0.0f, tc = 0.0f;
+    float faceIdx = 0.0f;
+    if (absRel.x >= absRel.y && absRel.x >= absRel.z) {
+        ma = absRel.x;
+        if (rel.x >= 0.0f) { sc = -rel.z; tc = rel.y; faceIdx = 0.0f; }
+        else               { sc =  rel.z; tc = rel.y; faceIdx = 1.0f; }
+    } else if (absRel.y >= absRel.x && absRel.y >= absRel.z) {
+        ma = absRel.y;
+        if (rel.y >= 0.0f) { sc = rel.x; tc = -rel.z; faceIdx = 2.0f; }
+        else               { sc = rel.x; tc =  rel.z; faceIdx = 3.0f; }
+    } else {
+        ma = absRel.z;
+        if (rel.z >= 0.0f) { sc =  rel.x; tc = rel.y; faceIdx = 4.0f; }
+        else               { sc = -rel.x; tc = rel.y; faceIdx = 5.0f; }
+    }
+
+    float zn = 0.15f;
+    float zf = max(0.5f, lightRadius);
+    if (ma <= zn) return 1.0f;
+
+    float2 faceUV = float2((sc / ma) * 0.5f + 0.5f, -(tc / ma) * 0.5f + 0.5f);
+    faceUV = clamp(faceUV, 0.004f, 0.996f);
+
+    float currentDepth = (zf / (zf - zn)) * (1.0f - zn / ma);
+    float depthBias = max(0.0014f * (1.0f - NdotL), 0.00035f);
+
+    float2 tileMin = float2(faceIdx * 0.125f + 0.0005f, 0.5f + (float)shadowSlot * 0.125f + 0.0005f);
+    float2 tileMax = float2((faceIdx + 1.0f) * 0.125f - 0.0005f, 0.5f + ((float)shadowSlot + 1.0f) * 0.125f - 0.0005f);
+    float2 atlasUV = float2((faceIdx + faceUV.x) * 0.125f, 0.5f + ((float)shadowSlot + faceUV.y) * 0.125f);
+    float texel = 1.0f / max(ShadowAtlasSize, 1024.0f);
+    float filterR = max(0.5f, ShadowSoftness * 0.65f) * texel;
+
+    static const float2 c_p_offsets[4] = {
+        float2(-0.5f, -0.5f), float2(0.5f, -0.5f),
+        float2(-0.5f,  0.5f), float2(0.5f,  0.5f)
+    };
+    float shadow = 0.0f;
+    [unroll]
+    for (int k = 0; k < 4; ++k) {
+        float2 sampleUV = clamp(atlasUV + c_p_offsets[k] * filterR, tileMin, tileMax);
+        shadow += ShadowMap.SampleCmpLevelZero(ShadowSampler, sampleUV, currentDepth - depthBias);
+    }
+    shadow *= 0.25f;
+    return lerp(1.0f, shadow, saturate(ShadowStrength));
 }
 
 float3 PerturbNormal(float3 normalMapSample, float3 N, float3 worldPos, float2 uv) {
@@ -450,7 +537,13 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
                 float3 specP = (Dp * Gp * Fp) / (4.0 * NdotV * NdotLp + 0.0001);
                 float3 diffP = ((float3(1.0, 1.0, 1.0) - Fp) * (1.0 - metallic) * baseColor) / 3.14159265;
 
-                float3 radP = PointLights[p].Color * PointLights[p].Intensity * atten * NdotLp;
+                int slotVecIdx = p >> 2;
+                int slotCompIdx = p & 3;
+                int4 slotVec = PointLightShadowSlots[slotVecIdx];
+                int shadowSlot = (slotCompIdx == 0) ? slotVec.x : ((slotCompIdx == 1) ? slotVec.y : ((slotCompIdx == 2) ? slotVec.z : slotVec.w));
+                float pointShadow = CalculatePointLightShadow(shadowSlot, PointLights[p].Pos, PointLights[p].Radius, input.WorldPos, geomNormal);
+
+                float3 radP = PointLights[p].Color * PointLights[p].Intensity * atten * NdotLp * pointShadow;
                 pointLightAccum += (diffP + specP) * radP;
             }
         }
@@ -507,6 +600,7 @@ cbuffer SceneConstants : register(b0) {
     float FogEnd;
     float3 PadFog;
     row_major float4x4 InvViewProj;
+    row_major float4x4 LightViewProjCascade1;
 };
 
 struct VS_SkyOut {
@@ -566,6 +660,7 @@ cbuffer SceneConstants : register(b0) {
     float FogEnd;
     float3 PadFog;
     row_major float4x4 InvViewProj;
+    row_major float4x4 LightViewProjCascade1;
 };
 
 cbuffer BoneConstants : register(b1) {
@@ -1122,11 +1217,15 @@ bool RenderWorld::init_shaders() {
     return true;
 }
 
-bool RenderWorld::init_shadow_resources() {
-    // 1. Create Shadow Map Texture
+bool RenderWorld::create_shadow_atlas(UINT atlas_size) {
+    atlas_size = std::clamp(atlas_size, 1024u, 4096u);
+    m_shadow_dsv.Reset();
+    m_shadow_srv.Reset();
+    m_shadow_texture.Reset();
+
     D3D11_TEXTURE2D_DESC texDesc{};
-    texDesc.Width = SHADOW_MAP_SIZE;
-    texDesc.Height = SHADOW_MAP_SIZE;
+    texDesc.Width = atlas_size;
+    texDesc.Height = atlas_size;
     texDesc.MipLevels = 1;
     texDesc.ArraySize = 1;
     texDesc.Format = DXGI_FORMAT_R32_TYPELESS;
@@ -1138,7 +1237,6 @@ bool RenderWorld::init_shadow_resources() {
     HRESULT hr = m_device->CreateTexture2D(&texDesc, nullptr, m_shadow_texture.GetAddressOf());
     if (FAILED(hr)) return false;
 
-    // 2. Create Depth Stencil View
     D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
     dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
     dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
@@ -1147,7 +1245,6 @@ bool RenderWorld::init_shadow_resources() {
     hr = m_device->CreateDepthStencilView(m_shadow_texture.Get(), &dsvDesc, m_shadow_dsv.GetAddressOf());
     if (FAILED(hr)) return false;
 
-    // 3. Create Shader Resource View
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
@@ -1156,6 +1253,14 @@ bool RenderWorld::init_shadow_resources() {
 
     hr = m_device->CreateShaderResourceView(m_shadow_texture.Get(), &srvDesc, m_shadow_srv.GetAddressOf());
     if (FAILED(hr)) return false;
+
+    m_shadow_atlas_size = atlas_size;
+    return true;
+}
+
+bool RenderWorld::init_shadow_resources() {
+    // 1-3. Create Shadow Atlas Texture, DSV, and SRV
+    if (!create_shadow_atlas(m_shadow_atlas_size)) return false;
 
     // 4. Create Shadow Comparison Sampler (Linear filtering with comparison)
     D3D11_SAMPLER_DESC sampDesc{};
@@ -1171,7 +1276,7 @@ bool RenderWorld::init_shadow_resources() {
     sampDesc.MinLOD = 0.0f;
     sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
 
-    hr = m_device->CreateSamplerState(&sampDesc, m_shadow_sampler.GetAddressOf());
+    HRESULT hr = m_device->CreateSamplerState(&sampDesc, m_shadow_sampler.GetAddressOf());
     if (FAILED(hr)) return false;
 
     // 5. Shadow Rasterizer State (CULL_NONE for shadow casting from all surfaces)
@@ -1373,6 +1478,7 @@ void RenderWorld::update_view_proj(const SharedBufferHeader& header) {
     cb.ambient_color[0] = m_ambient_color[0] * m_ambient_intensity;
     cb.ambient_color[1] = m_ambient_color[1] * m_ambient_intensity;
     cb.ambient_color[2] = m_ambient_color[2] * m_ambient_intensity;
+    cb.pad3 = static_cast<float>(m_shadow_atlas_size);
 
     // Atmospheric Distance Fog
     cb.fog_color[0] = m_sky_color[0];
@@ -1380,30 +1486,52 @@ void RenderWorld::update_view_proj(const SharedBufferHeader& header) {
     cb.fog_color[2] = m_sky_color[2];
     cb.fog_start = m_fog_start;
     cb.fog_end = m_fog_end;
+    cb.pad_fog[0] = m_csm_enabled ? 1.0f : 0.0f;
 
-    // Light View-Projection Matrix with Texel Snapping (Eliminates Shadow Crawling/Shimmering)
+    // Light View-Projection Matrices with Texel Snapping (Cascade 0 Near & Cascade 1 Far)
     float focusX = header.camera_target[0];
     float focusY = header.camera_target[1];
     float focusZ = header.camera_target[2];
 
-    const float orthoSize = m_shadow_coverage;
-    const float lightDist = 130.0f;
-    float lightEyeX = focusX - sunDir[0] * lightDist;
-    float lightEyeY = focusY - sunDir[1] * lightDist;
-    float lightEyeZ = focusZ - sunDir[2] * lightDist;
+    const float halfAtlas = static_cast<float>(std::max<UINT>(512u, m_shadow_atlas_size / 2));
 
-    float lightView[16];
-    ComputeLookAtLH(lightView, lightEyeX, lightEyeY, lightEyeZ, focusX, focusY, focusZ, 0.0f, 1.0f, 0.0f);
+    // Cascade 0 (Near)
+    const float orthoSize0 = m_shadow_coverage;
+    const float lightDist0 = 130.0f;
+    float lightEye0X = focusX - sunDir[0] * lightDist0;
+    float lightEye0Y = focusY - sunDir[1] * lightDist0;
+    float lightEye0Z = focusZ - sunDir[2] * lightDist0;
 
-    // Texel Snapping: lock shadow camera origin to discrete world texel increments in light view space
-    const float worldTexelSize = orthoSize / static_cast<float>(SHADOW_MAP_SIZE);
-    lightView[12] = std::floor(lightView[12] / worldTexelSize) * worldTexelSize;
-    lightView[13] = std::floor(lightView[13] / worldTexelSize) * worldTexelSize;
+    float lightView0[16];
+    ComputeLookAtLH(lightView0, lightEye0X, lightEye0Y, lightEye0Z, focusX, focusY, focusZ, 0.0f, 1.0f, 0.0f);
 
-    float lightProj[16];
-    ComputeOrthoLH(lightProj, orthoSize, orthoSize, 1.0f, 270.0f);
+    const float worldTexelSize0 = orthoSize0 / halfAtlas;
+    lightView0[12] = std::floor(lightView0[12] / worldTexelSize0) * worldTexelSize0;
+    lightView0[13] = std::floor(lightView0[13] / worldTexelSize0) * worldTexelSize0;
 
-    MatrixMultiply(cb.light_view_proj, lightView, lightProj);
+    float lightProj0[16];
+    ComputeOrthoLH(lightProj0, orthoSize0, orthoSize0, 1.0f, 270.0f);
+    MatrixMultiply(cb.light_view_proj, lightView0, lightProj0);
+
+    // Cascade 1 (Far)
+    const float orthoSize1 = m_shadow_coverage * 3.2f;
+    const float lightDist1 = 220.0f;
+    float lightEye1X = focusX - sunDir[0] * lightDist1;
+    float lightEye1Y = focusY - sunDir[1] * lightDist1;
+    float lightEye1Z = focusZ - sunDir[2] * lightDist1;
+
+    float lightView1[16];
+    ComputeLookAtLH(lightView1, lightEye1X, lightEye1Y, lightEye1Z, focusX, focusY, focusZ, 0.0f, 1.0f, 0.0f);
+
+    const float worldTexelSize1 = orthoSize1 / halfAtlas;
+    lightView1[12] = std::floor(lightView1[12] / worldTexelSize1) * worldTexelSize1;
+    lightView1[13] = std::floor(lightView1[13] / worldTexelSize1) * worldTexelSize1;
+
+    float lightProj1[16];
+    ComputeOrthoLH(lightProj1, orthoSize1, orthoSize1, 1.0f, 500.0f);
+    MatrixMultiply(cb.light_view_proj_c1, lightView1, lightProj1);
+
+    m_cached_scene_cb = cb;
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (SUCCEEDED(m_context->Map(m_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -1549,14 +1677,16 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
                 std::vector<DirectX::XMFLOAT4X4> bone_matrices;
                 const GM3D::AnimationClip* clip = nullptr;
                 float anim_time = 0.0f;
+                bool anim_loop = true;
 
                 auto it = m_entity_anims.find(item.entity_id);
                 if (it != m_entity_anims.end() && it->second.anim_index >= 0) {
                     clip = skinned_model->get_clip(static_cast<uint32_t>(it->second.anim_index));
                     anim_time = it->second.current_time;
+                    anim_loop = it->second.loop;
                 }
 
-                skinned_model->skeleton.evaluate_pose(clip, anim_time, bone_matrices);
+                skinned_model->skeleton.evaluate_pose(clip, anim_time, bone_matrices, anim_loop);
 
                 D3D11_MAPPED_SUBRESOURCE mappedBones{};
                 if (SUCCEEDED(m_context->Map(m_bone_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedBones))) {
@@ -1608,16 +1738,24 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
         }
     };
 
-    // ----------------------------------------------------
-    // PASS 1: SHADOW MAP PASS (Depth-Only from Sun View)
-    // ----------------------------------------------------
-    D3D11_VIEWPORT shadowVp{};
-    shadowVp.Width = static_cast<float>(SHADOW_MAP_SIZE);
-    shadowVp.Height = static_cast<float>(SHADOW_MAP_SIZE);
-    shadowVp.MinDepth = 0.0f;
-    shadowVp.MaxDepth = 1.0f;
-    m_context->RSSetViewports(1, &shadowVp);
+    // Assign shadow slots for point lights up to m_max_shadow_lights (max 4 slots in atlas bottom half)
+    int32_t next_shadow_slot = 0;
+    const int32_t max_slots = std::clamp(m_max_shadow_lights, 0, 4);
+    m_light_constants.max_shadow_lights = max_slots;
+    for (int i = 0; i < 16; ++i) {
+        if (m_shadows_enabled && m_shadow_strength > 0.0f &&
+            i < m_light_constants.point_light_count && m_point_light_cast_shadow[i] &&
+            m_light_constants.lights[i].intensity > 0.001f && m_light_constants.lights[i].radius > 0.2f &&
+            next_shadow_slot < max_slots) {
+            m_light_constants.shadow_slots[i] = next_shadow_slot++;
+        } else {
+            m_light_constants.shadow_slots[i] = -1;
+        }
+    }
 
+    // ----------------------------------------------------
+    // PASS 1: SHADOW MAP PASS (2-Cascade Sun + 6-Face Point Light Atlas)
+    // ----------------------------------------------------
     m_context->ClearDepthStencilView(m_shadow_dsv.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
     m_context->OMSetRenderTargets(0, nullptr, m_shadow_dsv.Get());
     m_context->OMSetDepthStencilState(m_shadow_depth_stencil_state.Get(), 0);
@@ -1631,9 +1769,126 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
     ID3D11Buffer* vscbs[] = { m_constant_buffer.Get(), m_bone_constant_buffer.Get() };
     m_context->VSSetConstantBuffers(0, 2, vscbs);
 
-    if (m_shadows_enabled && m_shadow_strength > 0.0f) {
-        for (const auto& [mesh_id, inst_list] : shadow_batches)
+    if (m_shadows_enabled && m_shadow_strength > 0.0f && !shadow_batches.empty()) {
+        const float halfAtlas = static_cast<float>(std::max<UINT>(512u, m_shadow_atlas_size / 2));
+
+        // 1a. Sun Cascade 0 (Top-Left Quadrant)
+        D3D11_VIEWPORT vp0{};
+        vp0.TopLeftX = 0.0f;
+        vp0.TopLeftY = 0.0f;
+        vp0.Width = halfAtlas;
+        vp0.Height = halfAtlas;
+        vp0.MinDepth = 0.0f;
+        vp0.MaxDepth = 1.0f;
+        m_context->RSSetViewports(1, &vp0);
+        for (const auto& [mesh_id, inst_list] : shadow_batches) {
             draw_batch_items(inst_list, mesh_id, 0, 0);
+        }
+
+        // 1b. Sun Cascade 1 (Top-Right Quadrant)
+        bool mutated_cb = false;
+        if (m_csm_enabled) {
+            SceneConstantBuffer cb1 = m_cached_scene_cb;
+            memcpy(cb1.light_view_proj, m_cached_scene_cb.light_view_proj_c1, sizeof(cb1.light_view_proj));
+            D3D11_MAPPED_SUBRESOURCE mappedCb{};
+            if (SUCCEEDED(m_context->Map(m_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCb))) {
+                memcpy(mappedCb.pData, &cb1, sizeof(SceneConstantBuffer));
+                m_context->Unmap(m_constant_buffer.Get(), 0);
+            }
+            mutated_cb = true;
+
+            D3D11_VIEWPORT vp1{};
+            vp1.TopLeftX = halfAtlas;
+            vp1.TopLeftY = 0.0f;
+            vp1.Width = halfAtlas;
+            vp1.Height = halfAtlas;
+            vp1.MinDepth = 0.0f;
+            vp1.MaxDepth = 1.0f;
+            m_context->RSSetViewports(1, &vp1);
+            for (const auto& [mesh_id, inst_list] : shadow_batches) {
+                draw_batch_items(inst_list, mesh_id, 0, 0);
+            }
+        }
+
+        // 1c. Point Light Omnidirectional 6-Face Tiles (Bottom Half: 4 slots x 6 faces)
+        if (next_shadow_slot > 0) {
+            const float tileSize = static_cast<float>(std::max<UINT>(128u, m_shadow_atlas_size / 8));
+            static const float faceDirs[6][3] = {
+                {  1.0f,  0.0f,  0.0f }, // +X
+                { -1.0f,  0.0f,  0.0f }, // -X
+                {  0.0f,  1.0f,  0.0f }, // +Y
+                {  0.0f, -1.0f,  0.0f }, // -Y
+                {  0.0f,  0.0f,  1.0f }, // +Z
+                {  0.0f,  0.0f, -1.0f }  // -Z
+            };
+            static const float faceUps[6][3] = {
+                { 0.0f, 1.0f,  0.0f }, // +X
+                { 0.0f, 1.0f,  0.0f }, // -X
+                { 0.0f, 0.0f, -1.0f }, // +Y
+                { 0.0f, 0.0f,  1.0f }, // -Y
+                { 0.0f, 1.0f,  0.0f }, // +Z
+                { 0.0f, 1.0f,  0.0f }  // -Z
+            };
+
+            for (int p = 0; p < m_light_constants.point_light_count; ++p) {
+                const int32_t slot = m_light_constants.shadow_slots[p];
+                if (slot < 0 || slot >= 4) continue;
+
+                const auto& pl = m_light_constants.lights[p];
+                const float zn = 0.15f;
+                const float zf = std::max(0.5f, pl.radius);
+                const float q = zf / (zf - zn);
+                const float proj90[16] = {
+                    1.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, 1.0f, 0.0f, 0.0f,
+                    0.0f, 0.0f, q,    1.0f,
+                    0.0f, 0.0f, -q * zn, 0.0f
+                };
+
+                for (int face = 0; face < 6; ++face) {
+                    float viewFace[16];
+                    ComputeLookAtLH(
+                        viewFace,
+                        pl.pos[0], pl.pos[1], pl.pos[2],
+                        pl.pos[0] + faceDirs[face][0],
+                        pl.pos[1] + faceDirs[face][1],
+                        pl.pos[2] + faceDirs[face][2],
+                        faceUps[face][0], faceUps[face][1], faceUps[face][2]);
+
+                    SceneConstantBuffer cbFace = m_cached_scene_cb;
+                    MatrixMultiply(cbFace.light_view_proj, viewFace, proj90);
+
+                    D3D11_MAPPED_SUBRESOURCE mappedCb{};
+                    if (SUCCEEDED(m_context->Map(m_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCb))) {
+                        memcpy(mappedCb.pData, &cbFace, sizeof(SceneConstantBuffer));
+                        m_context->Unmap(m_constant_buffer.Get(), 0);
+                    }
+                    mutated_cb = true;
+
+                    D3D11_VIEWPORT vpFace{};
+                    vpFace.TopLeftX = static_cast<float>(face) * tileSize;
+                    vpFace.TopLeftY = halfAtlas + static_cast<float>(slot) * tileSize;
+                    vpFace.Width = tileSize;
+                    vpFace.Height = tileSize;
+                    vpFace.MinDepth = 0.0f;
+                    vpFace.MaxDepth = 1.0f;
+                    m_context->RSSetViewports(1, &vpFace);
+
+                    for (const auto& [mesh_id, inst_list] : shadow_batches) {
+                        draw_batch_items(inst_list, mesh_id, 0, 0);
+                    }
+                }
+            }
+        }
+
+        // Restore SceneConstantBuffer (Cascade 0 in LightViewProj) for Pass 2
+        if (mutated_cb) {
+            D3D11_MAPPED_SUBRESOURCE mappedCb{};
+            if (SUCCEEDED(m_context->Map(m_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedCb))) {
+                memcpy(mappedCb.pData, &m_cached_scene_cb, sizeof(SceneConstantBuffer));
+                m_context->Unmap(m_constant_buffer.Get(), 0);
+            }
+        }
     }
 
     // Unbind shadow DSV so it can be sampled as SRV in Pass 2
@@ -1898,7 +2153,22 @@ void RenderWorld::set_shadow_settings(bool enabled, float strength, float softne
     m_shadow_coverage = std::clamp(coverage, 20.0f, 240.0f);
 }
 
-void RenderWorld::set_point_light(uint32_t index, float x, float y, float z, float radius, float r, float g, float b, float intensity) {
+void RenderWorld::set_shadow_quality(int quality, bool csm_enabled, int max_shadow_lights) {
+    m_shadow_quality = std::clamp(quality, 1, 3);
+    m_csm_enabled = csm_enabled;
+    m_max_shadow_lights = std::clamp(max_shadow_lights, 0, 4);
+
+    UINT desired_atlas = 2048;
+    if (m_shadow_quality == 1) desired_atlas = 1024;
+    else if (m_shadow_quality == 2) desired_atlas = 2048;
+    else if (m_shadow_quality == 3) desired_atlas = 4096;
+
+    if (m_device && desired_atlas != m_shadow_atlas_size) {
+        create_shadow_atlas(desired_atlas);
+    }
+}
+
+void RenderWorld::set_point_light(uint32_t index, float x, float y, float z, float radius, float r, float g, float b, float intensity, bool cast_shadow) {
     if (index >= 16) return;
     auto& light = m_light_constants.lights[index];
     light.pos[0] = x;
@@ -1909,6 +2179,7 @@ void RenderWorld::set_point_light(uint32_t index, float x, float y, float z, flo
     light.color[1] = g;
     light.color[2] = b;
     light.intensity = intensity;
+    m_point_light_cast_shadow[index] = cast_shadow;
 
     if (static_cast<int32_t>(index + 1) > m_light_constants.point_light_count) {
         m_light_constants.point_light_count = static_cast<int32_t>(index + 1);
@@ -1918,6 +2189,10 @@ void RenderWorld::set_point_light(uint32_t index, float x, float y, float z, flo
 void RenderWorld::clear_point_lights() {
     m_light_constants.point_light_count = 0;
     memset(m_light_constants.lights, 0, sizeof(m_light_constants.lights));
+    for (int i = 0; i < 16; ++i) {
+        m_point_light_cast_shadow[i] = false;
+        m_light_constants.shadow_slots[i] = -1;
+    }
 }
 
 void RenderWorld::set_sky_color(float r, float g, float b) {
@@ -1956,11 +2231,15 @@ bool RenderWorld::set_normal_map(uint16_t target_tex_id, uint16_t normal_tex_id)
     return m_texture_manager.set_normal_map_texture(target_tex_id, normal_tex_id);
 }
 
+void RenderWorld::set_material_properties(uint16_t id, const MaterialGPU& props) {
+    m_materials[id] = props;
+}
+
 void RenderWorld::set_material_properties(uint16_t id, const MaterialGPU& props, uint16_t albedo_tex, uint16_t normal_tex) {
     m_materials[id] = props;
     if (albedo_tex != 0 || normal_tex != 0) {
         m_material_textures[id] = { albedo_tex, normal_tex };
-    }
+    } else m_material_textures.erase(id);
 }
 
 void RenderWorld::clear_materials() {

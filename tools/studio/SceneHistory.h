@@ -51,8 +51,13 @@ private:
         auto path = scene.filepath; scene = value; scene.filepath = std::move(path);
     }
     static size_t bytes(const Scene& s) {
-        size_t result = sizeof(Scene) + s.terrain_heights.size() * sizeof(float) + s.entities.size() * sizeof(Entity);
-        for (const auto& e : s.entities) result += e.name.size() + e.tag.size() + e.model_path.size() + e.texture_path.size();
+        size_t result = sizeof(Scene) + s.name.capacity() + s.filepath.capacity();
+        result += s.terrain_heights.capacity() * sizeof(float) + s.terrain_splatmap.capacity() * sizeof(uint8_t);
+        result += s.entities.capacity() * sizeof(Entity) + s.materials.capacity() * sizeof(Material);
+        result += s.terrain_layers.capacity() * sizeof(TerrainMaterialLayer);
+        for (const auto& e : s.entities) result += e.name.capacity() + e.tag.capacity() + e.model_path.capacity() + e.texture_path.capacity();
+        for (const auto& m : s.materials) result += m.name.capacity() + m.albedo_path.capacity() + m.normal_path.capacity();
+        for (const auto& layer : s.terrain_layers) result += layer.name.capacity();
         return result;
     }
     void trim() {

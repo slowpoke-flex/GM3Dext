@@ -3,8 +3,17 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <unordered_set>
 
 namespace GM3D::Studio {
+
+struct TerrainMaterialLayer {
+    bool operator==(const TerrainMaterialLayer&) const = default;
+    std::string name = "Layer";
+    float color[3] = { 0.22f, 0.36f, 0.15f };
+    float roughness = 0.78f;
+    float scale = 1.0f;
+};
 
 struct Material {
     bool operator==(const Material&) const = default;
@@ -66,13 +75,23 @@ struct Entity {
     float custom_param1 = 0.0f;
     float custom_param2 = 0.0f;
 
-    // Physics Properties (Jolt Physics)
+    // Physics & Collider Component (Jolt Physics)
     int physics_type = 0;       // 0 = None, 1 = Static, 2 = Dynamic, 3 = Kinematic
     int collider_shape = 0;     // 0 = Box, 1 = Sphere, 2 = Capsule, 3 = Cylinder, 4 = Mesh
+    float collider_size[3] = { 1.0f, 1.0f, 1.0f };   // Multiplier relative to entity scale
+    float collider_offset[3] = { 0.0f, 0.0f, 0.0f }; // Local offset from pivot
     float mass = 1.0f;
     float friction = 0.6f;
     float restitution = 0.1f;
     uint32_t physics_body_id = 0;
+
+    // Skeletal Animator Component
+    bool has_animator = false;
+    int anim_clip_index = 0;
+    float anim_speed = 1.0f;
+    bool anim_loop = true;
+    bool anim_playing = false;
+    float anim_time = 0.0f;
 };
 
 struct Scene {
@@ -86,6 +105,34 @@ struct Scene {
 
     Scene() {
         init_default_materials();
+        init_default_terrain_layers();
+    }
+
+    void init_default_terrain_layers() {
+        if (!terrain_layers.empty()) return;
+        TerrainMaterialLayer l0;
+        l0.name = "Alpine Grass";
+        l0.color[0] = 0.22f; l0.color[1] = 0.36f; l0.color[2] = 0.15f;
+        l0.roughness = 0.78f; l0.scale = 1.0f;
+        terrain_layers.push_back(l0);
+
+        TerrainMaterialLayer l1;
+        l1.name = "Cliff Granite";
+        l1.color[0] = 0.38f; l1.color[1] = 0.36f; l1.color[2] = 0.34f;
+        l1.roughness = 0.85f; l1.scale = 1.0f;
+        terrain_layers.push_back(l1);
+
+        TerrainMaterialLayer l2;
+        l2.name = "Coastal Sand";
+        l2.color[0] = 0.80f; l2.color[1] = 0.73f; l2.color[2] = 0.52f;
+        l2.roughness = 0.65f; l2.scale = 1.0f;
+        terrain_layers.push_back(l2);
+
+        TerrainMaterialLayer l3;
+        l3.name = "Cobblestone Path";
+        l3.color[0] = 0.46f; l3.color[1] = 0.43f; l3.color[2] = 0.39f;
+        l3.roughness = 0.70f; l3.scale = 1.5f;
+        terrain_layers.push_back(l3);
     }
 
     void init_default_materials() {
@@ -134,17 +181,49 @@ struct Scene {
         return nullptr;
     }
 
+    // IDs are stored in 16 bits by render entities. Reuse gaps after reaching
+    // the upper bound; zero signals that every custom slot is occupied.
+    uint32_t allocate_material_id() {
+        constexpr uint32_t first = 9, last = 65535;
+        uint32_t candidate = next_material_id >= first && next_material_id <= last ? next_material_id : first;
+        std::unordered_set<uint32_t> used;
+        for (const auto& material : materials) used.insert(material.id);
+        for (uint32_t i = first; i <= last; ++i) {
+            if (!used.count(candidate)) {
+                next_material_id = candidate == last ? first : candidate + 1;
+                return candidate;
+            }
+            candidate = candidate == last ? first : candidate + 1;
+        }
+        return 0;
+    }
+
+    bool remove_material(uint32_t id) {
+        if (materials.size() <= 1 || !find_material(id)) return false;
+        uint32_t fallback = materials.front().id;
+        if (fallback == id) fallback = materials[1].id;
+        for (auto& entity : entities)
+            if (entity.material_id == id) entity.material_id = static_cast<uint16_t>(fallback);
+        for (auto it = materials.begin(); it != materials.end(); ++it) {
+            if (it->id == id) { materials.erase(it); return true; }
+        }
+        return false;
+    }
+
     // Sun & Directional Light
     float sun_pitch = 64.2f;
     float sun_yaw = 45.0f;
     float sun_color[3] = { 1.0f, 0.96f, 0.88f };
     float sun_intensity = 1.85f;
 
-    // Directional shadow settings
+    // Directional & Point Shadow Settings
     bool shadows_enabled = true;
     float shadow_strength = 0.85f;
     float shadow_softness = 2.0f;
     float shadow_coverage = 110.0f;
+    bool csm_enabled = true;
+    int shadow_quality = 2;      // 1 = Low (1024), 2 = Medium (2048), 3 = High (4096)
+    int max_shadow_lights = 4;   // Max point lights casting omnidirectional shadows (0..4)
 
     // Ambient Skylight & Atmosphere
     float ambient_color[3] = { 0.45f, 0.58f, 0.78f };
@@ -161,6 +240,8 @@ struct Scene {
     uint32_t terrain_seed = 1337;
     uint32_t terrain_body_id = 0;
     std::vector<float> terrain_heights; // Empty means procedural terrain.
+    std::vector<TerrainMaterialLayer> terrain_layers;
+    std::vector<uint8_t> terrain_splatmap; // grid_size * grid_size * 4 RGBA weights (empty = unpainted)
 
     Entity* find_entity(uint32_t id) {
         for (auto& e : entities) {
@@ -191,8 +272,8 @@ struct Scene {
             return false;
         }
         uint32_t current_id = entity_id;
-        int depth_guard = 0;
-        while (current_id != 0 && depth_guard++ < 256) {
+        std::unordered_set<uint32_t> visited;
+        while (current_id != 0 && visited.insert(current_id).second) {
             const Entity* ent = find_entity(current_id);
             if (!ent || ent->parent_id == 0) break;
             if (ent->parent_id == potential_ancestor_id) return true;
@@ -203,11 +284,14 @@ struct Scene {
 
     void get_all_descendants(uint32_t parent_id, std::vector<uint32_t>& out) const {
         if (parent_id == 0) return;
-        for (const auto& e : entities) {
-            if (e.parent_id == parent_id) {
-                out.push_back(e.id);
-                get_all_descendants(e.id, out);
-            }
+        std::unordered_set<uint32_t> visited{parent_id};
+        std::vector<uint32_t> pending{parent_id};
+        while (!pending.empty()) {
+            const uint32_t current = pending.back(); pending.pop_back();
+            auto children = get_children(current);
+            for (auto it = children.rbegin(); it != children.rend(); ++it)
+                if (visited.find(*it) == visited.end()) pending.push_back(*it);
+            if (current != parent_id && visited.insert(current).second) out.push_back(current);
         }
     }
 };

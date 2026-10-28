@@ -54,7 +54,7 @@ bool MeshManager::create_gpu_mesh(ID3D11Device* device, uint16_t mesh_id,
 
     // Vertex Buffer
     D3D11_BUFFER_DESC vbd{};
-    vbd.Usage = D3D11_USAGE_IMMUTABLE;
+    vbd.Usage = D3D11_USAGE_DEFAULT;
     vbd.ByteWidth = static_cast<UINT>(sizeof(Vertex3D) * vertices.size());
     vbd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 
@@ -84,6 +84,31 @@ bool MeshManager::set_mesh(ID3D11Device* device, uint16_t mesh_id,
                            const std::vector<Vertex3D>& vertices,
                            const std::vector<uint32_t>& indices) {
     return create_gpu_mesh(device, mesh_id, vertices, indices, false);
+}
+
+bool MeshManager::update_mesh_vertices(ID3D11DeviceContext* context, uint16_t mesh_id,
+                                       const std::vector<Vertex3D>& vertices,
+                                       uint32_t start_vertex, uint32_t vertex_count) {
+    if (!context || vertices.empty()) return false;
+    auto it = m_meshes.find(mesh_id);
+    if (it == m_meshes.end() || !it->second.vertex_buffer) return false;
+    if (vertices.size() != it->second.vertex_count) return false;
+
+    if (vertex_count == 0 || (start_vertex == 0 && vertex_count >= it->second.vertex_count)) {
+        context->UpdateSubresource(it->second.vertex_buffer.Get(), 0, nullptr, vertices.data(), 0, 0);
+        return true;
+    }
+    if (start_vertex >= it->second.vertex_count) return false;
+    const uint32_t end_vertex = std::min(it->second.vertex_count, start_vertex + vertex_count);
+    D3D11_BOX box{};
+    box.left = start_vertex * static_cast<UINT>(sizeof(Vertex3D));
+    box.right = end_vertex * static_cast<UINT>(sizeof(Vertex3D));
+    box.top = 0;
+    box.bottom = 1;
+    box.front = 0;
+    box.back = 1;
+    context->UpdateSubresource(it->second.vertex_buffer.Get(), 0, &box, vertices.data() + start_vertex, 0, 0);
+    return true;
 }
 
 void MeshManager::generate_cube(ID3D11Device* device) {
@@ -467,6 +492,12 @@ uint16_t MeshManager::load_glb_from_file(ID3D11Device* device, const std::string
     }
 
     bool has_skin = (data->skins_count > 0 && data->skins[0].joints_count > 0);
+    // The vertex shader's bone constant buffer has 128 entries. Reject models
+    // that cannot be represented rather than indexing outside that buffer.
+    if (has_skin && data->skins[0].joints_count > 128) {
+        cgltf_free(data);
+        return 0;
+    }
     std::unordered_map<const cgltf_node*, int> node_to_joint;
 
     GM3D::SkinnedModelData skinned_model;

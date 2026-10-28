@@ -73,6 +73,11 @@ private:
     // 3D Selection & Mouse Picking
     void pick_entity_at_mouse(float mouseX, float mouseY, float viewportW, float viewportH);
     void draw_selection_bounds(const Entity& entity, const float* view, const float* proj, float minX, float minY, float sizeX, float sizeY);
+    void draw_collider_bounds(const Entity& entity, const float* view, const float* proj, float minX, float minY, float sizeX, float sizeY);
+
+    // GameMaker LTS Scene & Asset Exporter
+    void export_gamemaker_dialog();
+    bool export_gamemaker_package(const std::string& export_dir, std::string& out_summary);
 
     // Multi-Selection and Hierarchy
     bool is_entity_selected(uint32_t id) const;
@@ -118,6 +123,7 @@ private:
 
     // Sync Scene <-> Engine
     void sync_scene_to_engine();
+    void sync_terrain_layers();
     void rebuild_terrain();
     void import_heightmap_dialog();
     void export_heightmap_dialog();
@@ -158,11 +164,17 @@ private:
     Scene m_simulation_backup;
     bool m_simulation_backup_valid = false;
     std::vector<uint32_t> m_simulation_bodies;
+    float m_sim_backup_cam_pos[3] = {};
+    float m_sim_backup_cam_target[3] = {};
+    float m_sim_backup_cam_yaw = 0.0f;
+    float m_sim_backup_cam_pitch = 0.0f;
+    float m_sim_backup_cam_orbit_dist = 22.0f;
 
     // Gizmo State
     GizmoOperation m_gizmo_operation = GizmoOperation::Translate;
     GizmoMode m_gizmo_mode = GizmoMode::World;
     bool m_gizmo_snap = false;
+    bool m_show_collider_gizmos = true;
     float m_snap_translation[3] = { 1.0f, 1.0f, 1.0f };
     float m_snap_rotation = 15.0f;
     float m_snap_scale = 0.5f;
@@ -176,9 +188,11 @@ private:
     float m_terrain_albedo_bounds[4] = {};
     float m_terrain_albedo_elapsed = 0.0f;
     TerrainBrushMode m_terrain_brush_mode = TerrainBrushMode::Raise;
+    int m_terrain_paint_layer = 0; // 0..3 = Layer 0..3, -1 = Erase (Auto-Biome)
     float m_terrain_brush_radius = 8.0f;
     float m_terrain_brush_strength = 4.0f;
     float m_terrain_flatten_height = 0.0f;
+    int m_terrain_grid_input = 128;
     int m_terrain_seed_input = 1337;
     float m_terrain_height_input = 32.0f;
     float m_terrain_world_input = 240.0f;

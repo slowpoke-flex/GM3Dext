@@ -90,6 +90,11 @@ public:
                   const std::vector<Vertex3D>& vertices, 
                   const std::vector<uint32_t>& indices);
 
+    // Partial or full vertex buffer update in-place without reallocating GPU buffers
+    bool update_mesh_vertices(ID3D11DeviceContext* context, uint16_t mesh_id,
+                              const std::vector<Vertex3D>& vertices,
+                              uint32_t start_vertex = 0, uint32_t vertex_count = 0);
+
 private:
     std::unordered_map<uint16_t, GPUMesh> m_meshes;
     std::unordered_map<uint16_t, GM3D::SkinnedModelData> m_skinned_models;

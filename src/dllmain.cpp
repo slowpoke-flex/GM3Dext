@@ -304,7 +304,15 @@ GM_EXPORT double GM_CALL light_set_ambient(double r, double g, double b, double 
 
 GM_EXPORT double GM_CALL light_point_set(double index, double x, double y, double z, double radius, double r, double g, double b, double intensity) {
     try {
-        return EngineContext::instance().set_point_light(index, x, y, z, radius, r, g, b, intensity);
+        return EngineContext::instance().set_point_light(index, x, y, z, radius, r, g, b, intensity, 1.0);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL light_point_set_ex(double index, double x, double y, double z, double radius, double r, double g, double b, double intensity, double cast_shadow) {
+    try {
+        return EngineContext::instance().set_point_light(index, x, y, z, radius, r, g, b, intensity, cast_shadow);
     } catch (...) {
         return GMResult::ERR_GENERAL;
     }
@@ -313,6 +321,22 @@ GM_EXPORT double GM_CALL light_point_set(double index, double x, double y, doubl
 GM_EXPORT double GM_CALL light_point_clear() {
     try {
         return EngineContext::instance().clear_point_lights();
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL render_set_shadow_settings(double enabled, double strength, double softness, double coverage) {
+    try {
+        return EngineContext::instance().set_shadow_settings(enabled, strength, softness, coverage);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL render_set_shadow_quality(double quality, double csm_enabled, double max_shadow_lights) {
+    try {
+        return EngineContext::instance().set_shadow_quality(quality, csm_enabled, max_shadow_lights);
     } catch (...) {
         return GMResult::ERR_GENERAL;
     }
@@ -499,6 +523,16 @@ GM_EXPORT double GM_CALL terrain_get_height(double x, double z) {
         return EngineContext::instance().terrain_get_height(x, z);
     } catch (...) {
         return 0.0;
+    }
+}
+
+// Packed little-endian data: three u32 counts, float heights, RGBA8 weights,
+// then five floats (RGB, roughness, scale) per terrain layer.
+GM_EXPORT double GM_CALL terrain_apply_edit_data(const void* data, double size_bytes) {
+    try {
+        return EngineContext::instance().terrain_apply_edit_data(data, size_bytes);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
     }
 }
 
