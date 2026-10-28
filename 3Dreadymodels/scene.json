@@ -1,0 +1,270 @@
+{
+    "name": "Untitled Scene",
+    "version": 1,
+    "environment": {
+        "sun": {
+            "pitch": 64.19999694824219,
+            "yaw": 55.678001403808594,
+            "color": [
+                0.9215686917304993,
+                0.8274510502815247,
+                0.6823529601097107
+            ],
+            "intensity": 0.625
+        },
+        "ambient": {
+            "color": [
+                0.44999998807907104,
+                0.5799999833106995,
+                0.7799999713897705
+            ],
+            "intensity": 1.149999976158142
+        },
+        "sky_color": [
+            0.02352941408753395,
+            0.11764706671237946,
+            0.364705890417099
+        ],
+        "fog": {
+            "start": 160.0,
+            "end": 600.0
+        }
+    },
+    "terrain": {
+        "enabled": true,
+        "grid_size": 128,
+        "world_size": 240.0,
+        "height_scale": 32.0,
+        "seed": 1331
+    },
+    "entities": [
+        {
+            "id": 1,
+            "name": "Grid Floor",
+            "tag": "Default",
+            "transform": {
+                "position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "scale": [
+                    240.0,
+                    1.0,
+                    240.0
+                ]
+            },
+            "render": {
+                "mesh_id": 3,
+                "material_id": 0,
+                "texture_id": 0,
+                "cast_shadow": false,
+                "visible": true,
+                "param1": 0.0,
+                "param2": 0.0
+            },
+            "physics": {
+                "type": 1,
+                "shape": 0,
+                "mass": 1.0,
+                "friction": 0.6000000238418579,
+                "restitution": 0.10000000149011612
+            }
+        },
+        {
+            "id": 2,
+            "name": "Central Cube",
+            "tag": "Default",
+            "transform": {
+                "position": [
+                    0.0,
+                    1.0,
+                    0.0
+                ],
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "scale": [
+                    2.0,
+                    2.0,
+                    2.0
+                ]
+            },
+            "render": {
+                "mesh_id": 0,
+                "material_id": 2,
+                "texture_id": 0,
+                "cast_shadow": true,
+                "visible": true,
+                "param1": 0.0,
+                "param2": 0.0
+            },
+            "physics": {
+                "type": 2,
+                "shape": 0,
+                "mass": 1.0,
+                "friction": 0.6000000238418579,
+                "restitution": 0.10000000149011612
+            }
+        },
+        {
+            "id": 3,
+            "name": "Granite Boulder",
+            "tag": "Default",
+            "transform": {
+                "position": [
+                    4.0,
+                    1.2000000476837158,
+                    2.0
+                ],
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "scale": [
+                    2.4000000953674316,
+                    2.4000000953674316,
+                    2.4000000953674316
+                ]
+            },
+            "render": {
+                "mesh_id": 1,
+                "material_id": 8,
+                "texture_id": 0,
+                "cast_shadow": true,
+                "visible": true,
+                "param1": 0.0,
+                "param2": 0.0
+            },
+            "physics": {
+                "type": 2,
+                "shape": 0,
+                "mass": 1.0,
+                "friction": 0.6000000238418579,
+                "restitution": 0.10000000149011612
+            }
+        },
+        {
+            "id": 4,
+            "name": "UAL1_Standard_4",
+            "tag": "Default",
+            "transform": {
+                "position": [
+                    2.111806631088257,
+                    3.9478793144226074,
+                    -8.361844062805176
+                ],
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            },
+            "render": {
+                "mesh_id": 100,
+                "material_id": 0,
+                "texture_id": 0,
+                "cast_shadow": true,
+                "visible": true,
+                "param1": 0.0,
+                "param2": 0.0
+            },
+            "physics": {
+                "type": 0,
+                "shape": 0,
+                "mass": 1.0,
+                "friction": 0.6000000238418579,
+                "restitution": 0.10000000149011612
+            }
+        },
+        {
+            "id": 5,
+            "name": "PineTree_5",
+            "tag": "Default",
+            "transform": {
+                "position": [
+                    0.0,
+                    3.9478793144226074,
+                    -8.361844062805176
+                ],
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            },
+            "render": {
+                "mesh_id": 6,
+                "material_id": 3,
+                "texture_id": 0,
+                "cast_shadow": true,
+                "visible": true,
+                "param1": 0.0,
+                "param2": 0.0
+            },
+            "physics": {
+                "type": 0,
+                "shape": 0,
+                "mass": 1.0,
+                "friction": 0.6000000238418579,
+                "restitution": 0.10000000149011612
+            }
+        },
+        {
+            "id": 6,
+            "name": "Cylinder_6",
+            "tag": "Default",
+            "transform": {
+                "position": [
+                    9.260013580322266,
+                    11.629980087280273,
+                    6.9562458992004395
+                ],
+                "rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            },
+            "render": {
+                "mesh_id": 2,
+                "material_id": 0,
+                "texture_id": 0,
+                "cast_shadow": true,
+                "visible": true,
+                "param1": 0.0,
+                "param2": 0.0
+            },
+            "physics": {
+                "type": 1,
+                "shape": 0,
+                "mass": 1.0,
+                "friction": 0.6000000238418579,
+                "restitution": 0.10000000149011612
+            }
+        }
+    ]
+}

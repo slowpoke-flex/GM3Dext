@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NW3D - 3D Skeleton Baker & Multi-Angle Renderer</title>
+    <script src="three.min.js"></script>
+    <script src="GLTFLoader.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #0f141f;
+            color: #e0f2fe;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 { margin: 10px 0; color: #00e5ff; font-size: 20px; }
+        #canvas-container {
+            position: relative;
+            margin: 15px 0;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #1e293b;
+        }
+        #status { font-family: monospace; color: #38bdf8; margin: 10px; }
+        .gallery {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            max-width: 900px;
+            justify-content: center;
+            margin-top: 15px;
+        }
+        .frame-box {
+            background: #1e293b;
+            padding: 8px;
+            border-radius: 6px;
+            text-align: center;
+            font-size: 11px;
+        }
+        .frame-box img {
+            display: block;
+            width: 128px;
+            height: 128px;
+            background: #090d16;
+            margin-bottom: 4px;
+            border: 1px solid #334155;
+        }
+    </style>
+</head>
+<body>
+    <h1>NW3D: Skeleton Warrior 3D Multi-Angle & Normal Map Baker</h1>
+    <div id="status">Loading 3D model...</div>
+    <div id="canvas-container">
+        <canvas id="render-canvas" width="256" height="256"></canvas>
+    </div>
+    <div class="gallery" id="gallery"></div>
+
+    <script>
+        const canvas = document.getElementById('render-canvas');
+        const statusEl = document.getElementById('status');
+        const galleryEl = document.getElementById('gallery');
+
+        // Three.js Scene Setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+        
+        // MOBA Top-Down Camera Elevation (approx 35 degrees from horizontal, looking down at model)
+        const camDistance = 3.8;
+        const camElevationDeg = 28;
+        const camElevRad = camElevationDeg * Math.PI / 180;
+        
+        const renderer = new THREE.WebGLRenderer({
+            canvas: canvas,
+            alpha: true,
+            antialias: true,
+            preserveDrawingBuffer: true
+        });
+        renderer.setClearColor(0x000000, 0);
+        renderer.setSize(256, 256);
+        renderer.outputEncoding = THREE.sRGBEncoding;
+
+        // Lighting for diffuse pass
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.95);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xfff8ee, 0.6);
+        dirLight.position.set(2, 5, 4);
+        scene.add(dirLight);
+
+        let model = null;
+        let originalMaterials = new Map();
+        const normalMaterial = new THREE.MeshNormalMaterial();
+
+        const loader = new THREE.GLTFLoader();
+        loader.load('Skeleton_Warrior.glb', function(gltf) {
+            model = gltf.scene;
+            
+            // Center & scale model nicely in frame
+            const box = new THREE.Box3().setFromObject(model);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            
+            // Ground at bottom, center X & Z
+            model.position.x = -center.x;
+            model.position.y = -box.min.y; // standing on Y=0
+            model.position.z = -center.z;
+            
+            const rootGroup = new THREE.Group();
+            rootGroup.add(model);
+            scene.add(rootGroup);
+
+            // Center target of camera at torso height
+            const targetY = size.y * 0.48;
+            camera.position.set(0, targetY + camDistance * Math.sin(camElevRad), camDistance * Math.cos(camElevRad));
+            camera.lookAt(0, targetY, 0);
+
+            // Save original materials
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    originalMaterials.set(child, child.material);
+                }
+            });
+
+            statusEl.innerText = "Model loaded! Starting multi-angle baking...";
+            setTimeout(() => bakeAllAngles(rootGroup), 200);
+        }, undefined, function(err) {
+            statusEl.innerText = "Error loading GLB: " + err;
+            console.error(err);
+        });
+
+        // 8 Direction angles: 0: South (facing camera), 45: SW, 90: West, etc.
+        const DIRECTIONS = [
+            { id: 0, name: "South (Front)", angleDeg: 0 },
+            { id: 1, name: "South-West",   angleDeg: 45 },
+            { id: 2, name: "West (Left)",   angleDeg: 90 },
+            { id: 3, name: "North-West",   angleDeg: 135 },
+            { id: 4, name: "North (Back)",  angleDeg: 180 },
+            { id: 5, name: "North-East",   angleDeg: 225 },
+            { id: 6, name: "East (Right)",  angleDeg: 270 },
+            { id: 7, name: "South-East",   angleDeg: 315 }
+        ];
+
+        async function bakeAllAngles(rootGroup) {
+            const results = [];
+
+            for (const dir of DIRECTIONS) {
+                // Rotate model around Y axis
+                rootGroup.rotation.y = dir.angleDeg * Math.PI / 180;
+
+                // 1. Render Diffuse Pass
+                setMaterialMode(false);
+                renderer.render(scene, camera);
+                const diffDataUrl = canvas.toDataURL('image/png');
+
+                // 2. Render Tangent/Screen Normal Map Pass
+                setMaterialMode(true);
+                renderer.render(scene, camera);
+                const normDataUrl = canvas.toDataURL('image/png');
+
+                results.push({
+                    dir: dir,
+                    diffuse: diffDataUrl,
+                    normal: normDataUrl
+                });
+
+                // Add to visual gallery
+                const box = document.createElement('div');
+                box.className = 'frame-box';
+                box.innerHTML = `
+                    <div style="font-weight:bold; color:#00e5ff; margin-bottom:4px;">${dir.name}</div>
+                    <img src="${diffDataUrl}" title="Diffuse">
+                    <img src="${normDataUrl}" title="Normal Map">
+                `;
+                galleryEl.appendChild(box);
+
+                // Send to Python server if available
+                await postFrame(`skeleton_diff_${dir.id}.png`, diffDataUrl);
+                await postFrame(`skeleton_norm_${dir.id}.png`, normDataUrl);
+            }
+
+            statusEl.innerText = "Baking Complete! 8-direction Diffuse & Normal maps generated.";
+            await postComplete();
+        }
+
+        function setMaterialMode(useNormals) {
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    if (useNormals) {
+                        child.material = normalMaterial;
+                    } else {
+                        child.material = originalMaterials.get(child);
+                    }
+                }
+            });
+        }
+
+        async function postFrame(filename, dataUrl) {
+            try {
+                await fetch('/save_frame', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename, data: dataUrl })
+                });
+            } catch (e) {
+                // Ignore if running standalone without backend
+            }
+        }
+
+        async function postComplete() {
+            try {
+                await fetch('/bake_done', { method: 'POST' });
+            } catch (e) {}
+        }
+    </script>
+</body>
+</html>

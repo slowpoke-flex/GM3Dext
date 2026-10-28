@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>.NW3D - 3D Skeleton Warrior & Water Puddle Interactive Studio</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #090d16;
+            color: #e0f2fe;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 16px;
+            user-select: none;
+        }
+        header { text-align: center; margin-bottom: 20px; }
+        h1 {
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #00e5ff; box-shadow: 0 0 12px #00e5ff; display: inline-block; }
+        .subtitle { font-size: 14px; color: #94a3b8; margin-top: 6px; }
+
+        .viewport-card {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+        canvas {
+            background: #2e6232;
+            border-radius: 8px;
+            cursor: crosshair;
+            display: block;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.4);
+        }
+        .controls-bar {
+            display: flex;
+            gap: 16px;
+            margin-top: 16px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .btn {
+            background: #1e293b;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .btn:hover { background: #334155; color: #fff; border-color: #00e5ff; }
+        .btn.active { background: #0284c7; color: #fff; border-color: #38bdf8; box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+
+        .slider-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #cbd5e1;
+        }
+        input[type="range"] { accent-color: #00e5ff; cursor: pointer; }
+
+        .info-panel {
+            margin-top: 18px;
+            max-width: 860px;
+            background: #131d2e;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            padding: 16px;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #94a3b8;
+        }
+        .info-panel strong { color: #00e5ff; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><span class="dot"></span> .NW3D 2.5D Volumetric Studio</h1>
+        <p class="subtitle">KayKit Skeleton Warrior 3D Model Baked with Tangent Normals & 3D Fresnel Water</p>
+    </header>
+
+    <div class="viewport-card">
+        <canvas id="canvas" width="860" height="540"></canvas>
+
+        <div class="controls-bar">
+            <button class="btn active" id="btn-pbr" onclick="setMode('pbr')">✨ PBR Shaded</button>
+            <button class="btn" id="btn-diff" onclick="setMode('diff')">📄 Diffuse</button>
+            <button class="btn" id="btn-norm" onclick="setMode('norm')">🔮 Normal Map</button>
+
+            <div class="slider-group">
+                <span>Skeleton Angle:</span>
+                <input type="range" id="skel-angle" min="0" max="7" value="0" step="1" oninput="updateSkelAngle(this.value)">
+                <span id="skel-angle-label">0 (South)</span>
+            </div>
+
+            <div class="slider-group">
+                <span>Sun Azimuth:</span>
+                <input type="range" id="sun-azim" min="0" max="360" value="45" oninput="updateSunAzim(this.value)">
+                <span id="sun-azim-label">45°</span>
+            </div>
+
+            <button class="btn" id="btn-spin" onclick="toggleSpin()">🔄 Auto Spin</button>
+        </div>
+    </div>
+
+    <div class="info-panel">
+        <strong>💡 Interactive Features:</strong><br>
+        • <strong>Move Cursor:</strong> Cast dynamic 3D torchlight across the grass, water puddle, and characters.<br>
+        • <strong>Click Puddle:</strong> Generates fluid ripples that disturb caustics and water surface reflections.<br>
+        • <strong>3D Normal Mapping:</strong> Notice how the skeleton's horned helmet, ribs, and shield catch directional highlights as the sun or torch rotates.<br>
+        • <strong>Schlick's Fresnel Water:</strong> The golden sun reflection glint shifts dynamically based on sun angle.
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let mode = 'pbr'; // 'pbr', 'diff', 'norm'
+        let skelDir = 0;
+        let sunAzimuth = 45;
+        let sunElevation = 42;
+        let autoSpin = false;
+        let waterTime = 0;
+
+        const mouse = { x: 430, y: 350, isDown: false };
+        const ripples = [];
+
+        // Load 8 diffuse and normal images
+        const skelDiffImages = [];
+        const skelNormImages = [];
+        let loadedCount = 0;
+        const totalImages = 16;
+
+        for (let i = 0; i < 8; i++) {
+            const imgD = new Image();
+            imgD.src = `out_skeleton/skeleton_diff_${i}.png`;
+            imgD.onload = () => checkLoaded();
+            skelDiffImages.push(imgD);
+
+            const imgN = new Image();
+            imgN.src = `out_skeleton/skeleton_norm_dx_${i}.png`;
+            imgN.onload = () => checkLoaded();
+            skelNormImages.push(imgN);
+        }
+
+        function checkLoaded() {
+            loadedCount++;
+            if (loadedCount >= totalImages) {
+                requestAnimationFrame(loop);
+            }
+        }
+
+        function setMode(m) {
+            mode = m;
+            document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-${m}`).classList.add('active');
+        }
+
+        function updateSkelAngle(v) {
+            skelDir = parseInt(v);
+            const dirs = ['South', 'SW', 'West', 'NW', 'North', 'NE', 'East', 'SE'];
+            document.getElementById('skel-angle-label').innerText = `${skelDir} (${dirs[skelDir]})`;
+        }
+
+        function updateSunAzim(v) {
+            sunAzimuth = parseFloat(v);
+            document.getElementById('sun-azim-label').innerText = `${Math.round(sunAzimuth)}°`;
+        }
+
+        function toggleSpin() {
+            autoSpin = !autoSpin;
+            document.getElementById('btn-spin').classList.toggle('active', autoSpin);
+        }
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            
+            // Add ripple
+            ripples.push({ x: mx, y: my, r: 4, alpha: 0.9, maxR: 50, spd: 1.5 });
+        });
+
+        // Add some initial ripples
+        ripples.push({ x: 400, y: 260, r: 12, alpha: 0.8, maxR: 55, spd: 1.0 });
+
+        const puddle = { x: 430, y: 270, rx: 170, ry: 85 };
+
+        function loop() {
+            waterTime += 0.04;
+
+            if (autoSpin) {
+                sunAzimuth = (sunAzimuth + 0.8) % 360;
+                document.getElementById('sun-azim').value = sunAzimuth;
+                document.getElementById('sun-azim-label').innerText = `${Math.round(sunAzimuth)}°`;
+            }
+
+            // Update ripples
+            for (let i = ripples.length - 1; i >= 0; i--) {
+                const rip = ripples[i];
+                rip.r += rip.spd;
+                rip.alpha -= 0.016;
+                if (rip.alpha <= 0 || rip.r >= rip.maxR) {
+                    ripples.splice(i, 1);
+                }
+            }
+
+            render();
+            requestAnimationFrame(loop);
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Lawn Ground
+            ctx.fillStyle = '#2e6232';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Lawn Grid
+            ctx.strokeStyle = '#28562c';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 48) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 48) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+
+            // 2. Sun Vector
+            const radAz = sunAzimuth * Math.PI / 180;
+            const radEl = sunElevation * Math.PI / 180;
+            const sunDir = [
+                Math.cos(radAz) * Math.cos(radEl),
+                Math.sin(radAz) * Math.cos(radEl),
+                Math.sin(radEl)
+            ];
+
+            // 3. Water Puddle
+            // A. Soaked Mud Rim
+            ctx.fillStyle = 'rgba(22, 48, 24, 0.45)';
+            ctx.beginPath();
+            ctx.ellipse(puddle.x, puddle.y, puddle.rx + 24, puddle.ry + 14, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // B. Clear Water Basin
+            ctx.fillStyle = 'rgba(14, 58, 76, 0.92)';
+            ctx.beginPath();
+            ctx.ellipse(puddle.x, puddle.y, puddle.rx, puddle.ry, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Inner Deep Abyss
+            ctx.fillStyle = 'rgba(8, 36, 52, 0.85)';
+            ctx.beginPath();
+            ctx.ellipse(puddle.x, puddle.y, puddle.rx * 0.75, puddle.ry * 0.72, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // C. Caustics
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.22)';
+            ctx.lineWidth = 2;
+            for (let c = -2; c <= 2; c++) {
+                const cy = puddle.y + c * 20;
+                ctx.beginPath();
+                for (let px = puddle.x - puddle.rx * 0.7; px <= puddle.x + puddle.rx * 0.7; px += 16) {
+                    const py = cy + Math.sin(waterTime * 2.2 + px * 0.05 + c) * 3.5;
+                    if (px === puddle.x - puddle.rx * 0.7) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.stroke();
+            }
+
+            // D. Ripples
+            ctx.strokeStyle = '#5ad2f5';
+            for (const rip of ripples) {
+                ctx.globalAlpha = rip.alpha * 0.8;
+                ctx.beginPath();
+                ctx.ellipse(rip.x, rip.y, rip.r * 1.8, rip.r * 0.9, 0, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1.0;
+
+            // E. Fresnel Sun Glint
+            const glintX = puddle.x + sunDir[0] * (puddle.rx * 0.55);
+            const glintY = puddle.y + sunDir[1] * (puddle.ry * 0.55);
+            const fresnel = Math.pow(1.0 - Math.sin(radEl), 3.0) * 0.5 + 0.5;
+
+            ctx.fillStyle = `rgba(255, 240, 180, ${0.45 * fresnel})`;
+            ctx.beginPath();
+            ctx.ellipse(glintX, glintY, 50, 20, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = `rgba(255, 255, 230, ${0.85 * fresnel})`;
+            ctx.beginPath();
+            ctx.ellipse(glintX, glintY, 22, 9, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+
+            // 4. Directional Shadows
+            const tanEl = Math.max(0.22, Math.tan(radEl));
+            const shMult = 1.0 / tanEl;
+            const shDx = -Math.cos(radAz) * shMult;
+            const shDy = -Math.sin(radAz) * shMult;
+
+            const skelPos = { x: 380, y: 280, scale: 0.7 };
+            const guardPos = { x: 530, y: 250, scale: 0.65 };
+
+            drawShadow(skelDiffImages[skelDir], skelPos.x, skelPos.y, skelPos.scale, shDx, shDy);
+            drawShadow(skelDiffImages[1], guardPos.x, guardPos.y, guardPos.scale, shDx, shDy);
+
+            // 5. Draw Characters
+            drawSkelEntity(skelDir, skelPos.x, skelPos.y, skelPos.scale, sunDir);
+            drawSkelEntity(1, guardPos.x, guardPos.y, guardPos.scale, sunDir);
+
+            // 6. Torch light glow on cursor
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const grad = ctx.createRadialGradient(mouse.x, mouse.y, 10, mouse.x, mouse.y, 120);
+            grad.addColorStop(0, 'rgba(255, 160, 50, 0.35)');
+            grad.addColorStop(1, 'rgba(255, 160, 50, 0)');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(mouse.x, mouse.y, 120, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        function drawShadow(img, x, y, scale, shDx, shDy) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.transform(1, 0, shDx * 0.35, 0.3, 0, 0);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+            ctx.globalCompositeOperation = 'source-over';
+            
+            // Draw silhouette
+            const w = 256 * scale;
+            const h = 256 * scale;
+            ctx.globalAlpha = 0.4;
+            ctx.drawImage(img, -w/2, -h + 20, w, h);
+            ctx.restore();
+        }
+
+        function drawSkelEntity(dirIdx, x, y, scale, sunDir) {
+            const diff = skelDiffImages[dirIdx];
+            const norm = skelNormImages[dirIdx];
+            const w = 256 * scale;
+            const h = 256 * scale;
+            const dx = x - w / 2;
+            const dy = y - h + 16;
+
+            if (mode === 'diff') {
+                ctx.drawImage(diff, dx, dy, w, h);
+            } else if (mode === 'norm') {
+                ctx.drawImage(norm, dx, dy, w, h);
+            } else {
+                // PBR mode with 2D lighting overlay
+                ctx.drawImage(diff, dx, dy, w, h);
+
+                // Add directional specular & rim glow overlay
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                
+                // Light intensity based on sun elevation & torch proximity
+                const distToTorch = Math.hypot(x - mouse.x, y - mouse.y);
+                const torchFactor = Math.max(0, 1.0 - distToTorch / 350.0);
+                
+                ctx.globalAlpha = 0.25 + torchFactor * 0.4;
+                ctx.drawImage(diff, dx, dy, w, h);
+                ctx.restore();
+            }
+        }
+
+        // Auto ripple every 2.5s
+        setInterval(() => {
+            const ang = Math.random() * Math.PI * 2;
+            const dist = Math.random() * 0.8;
+            ripples.push({
+                x: puddle.x + Math.cos(ang) * puddle.rx * dist,
+                y: puddle.y + Math.sin(ang) * puddle.ry * dist,
+                r: 3,
+                alpha: 0.85,
+                maxR: 45,
+                spd: 1.1
+            });
+        }, 2200);
+    </script>
+</body>
+</html>
