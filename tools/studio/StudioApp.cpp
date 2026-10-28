@@ -14,6 +14,7 @@
 
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <filesystem>
 #include <cmath>
 #include <cctype>
@@ -49,22 +50,6 @@ void HelpTooltip(const char* description) {
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
     }
-}
-
-// Euler (Degrees) to Quaternion (XYZW)
-void EulerToQuat(float pitch, float yaw, float roll, float& qx, float& qy, float& qz, float& qw) {
-    float p = pitch * 0.5f * 0.0174532925f;
-    float y = yaw   * 0.5f * 0.0174532925f;
-    float r = roll  * 0.5f * 0.0174532925f;
-
-    float sinP = sinf(p); float cosP = cosf(p);
-    float sinY = sinf(y); float cosY = cosf(y);
-    float sinR = sinf(r); float cosR = cosf(r);
-
-    qx = sinR * cosY * cosP - cosR * sinY * sinP;
-    qy = cosR * sinY * cosP + sinR * cosY * sinP;
-    qz = cosR * cosY * sinP - sinR * sinY * cosP;
-    qw = cosR * cosY * cosP + sinR * sinY * sinP;
 }
 
 // Quaternion (XYZW) to Euler (Degrees)
@@ -392,10 +377,22 @@ void StudioApp::update(float delta_time) {
             auto& e = m_scene.entities[i];
             if (e.physics_type == 2 && e.physics_body_id != 0) {
                 const SharedEntityData& sed = entities[i];
-                e.position[0] = sed.px;
-                e.position[1] = sed.py;
-                e.position[2] = sed.pz;
-                QuatToEuler(sed.qx, sed.qy, sed.qz, sed.qw, e.rotation[0], e.rotation[1], e.rotation[2]);
+                float wpos[3] = {
+                    sed.px - e.collider_offset[0],
+                    sed.py - e.collider_offset[1],
+                    sed.pz - e.collider_offset[2]
+                };
+                float wrot[3];
+                QuatToEuler(sed.qx, sed.qy, sed.qz, sed.qw, wrot[0], wrot[1], wrot[2]);
+                if (e.parent_id == 0) {
+                    e.position[0] = wpos[0]; e.position[1] = wpos[1]; e.position[2] = wpos[2];
+                    e.rotation[0] = wrot[0]; e.rotation[1] = wrot[1]; e.rotation[2] = wrot[2];
+                } else {
+                    float old_wpos[3], old_wrot[3], old_wscale[3], wmat[16];
+                    ComputeWorldTransform(m_scene, e, old_wpos, old_wrot, old_wscale, wmat);
+                    ImGuizmo::RecomposeMatrixFromComponents(wpos, wrot, old_wscale, wmat);
+                    ComputeLocalTransform(m_scene, e.parent_id, wmat, e.position, e.rotation, e.scale);
+                }
             }
         }
     }
@@ -567,12 +564,16 @@ void StudioApp::sync_scene_to_engine() {
     for (const auto& entity : m_scene.entities) {
         if (!entity.is_point_light || !entity.visible) continue;
         if (light_index >= 16) break;
-        ctx.set_point_light(light_index++, entity.position[0], entity.position[1], entity.position[2],
+        float lpos[3], lrot[3], lscale[3];
+        ComputeWorldTransform(m_scene, entity, lpos, lrot, lscale);
+        ctx.set_point_light(light_index++, lpos[0], lpos[1], lpos[2],
                             std::max(0.1f, entity.light_radius), entity.light_color[0], entity.light_color[1],
-                            entity.light_color[2], std::max(0.0f, entity.light_intensity));
+                            entity.light_color[2], std::max(0.0f, entity.light_intensity),
+                            entity.cast_shadow ? 1.0 : 0.0);
     }
     if (auto* rw = ctx.get_render_world()) {
         rw->set_shadow_settings(m_scene.shadows_enabled, m_scene.shadow_strength, m_scene.shadow_softness, m_scene.shadow_coverage);
+        rw->set_shadow_quality(m_scene.shadow_quality, m_scene.csm_enabled, m_scene.max_shadow_lights);
         for (const auto& mat : m_scene.materials) {
             MaterialGPU gpuMat{};
             gpuMat.base_color[0] = mat.base_color[0];
@@ -590,6 +591,18 @@ void StudioApp::sync_scene_to_engine() {
             gpuMat.alpha_mode = mat.alpha_mode;
             gpuMat.preset_id = mat.is_builtin_preset ? static_cast<int32_t>(mat.preset_index) : 0;
             rw->set_material_properties(static_cast<uint16_t>(mat.id), gpuMat, mat.albedo_tex_id, mat.normal_tex_id);
+        }
+        for (const auto& entity : m_scene.entities) {
+            if (entity.has_animator) {
+                if (entity.anim_playing) {
+                    rw->play_animation(entity.id, entity.anim_clip_index, entity.anim_speed, entity.anim_loop);
+                } else {
+                    rw->play_animation(entity.id, entity.anim_clip_index, 0.0f, entity.anim_loop);
+                    rw->set_animation_time(entity.id, entity.anim_time);
+                }
+            } else {
+                rw->stop_animation(entity.id);
+            }
         }
     }
     ctx.set_sun_light(lx, ly, lz, m_scene.sun_color[0], m_scene.sun_color[1], m_scene.sun_color[2], m_scene.sun_intensity);
@@ -771,6 +784,7 @@ void StudioApp::draw_main_menu() {
             if (ImGui::MenuItem("Save Scene", "Ctrl+S")) save_scene();
             if (ImGui::MenuItem("Save Scene As...")) save_scene_as_dialog();
             ImGui::Separator();
+            if (ImGui::MenuItem("Export for GameMaker LTS...", "Ctrl+E")) export_gamemaker_dialog();
             if (ImGui::MenuItem("Import 3D Model (.glb, .obj)...", "Ctrl+I")) import_model_dialog();
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) request_close();
@@ -818,6 +832,7 @@ void StudioApp::draw_main_menu() {
             if (ImGui::MenuItem("World Space", nullptr, m_gizmo_mode == GizmoMode::World)) m_gizmo_mode = GizmoMode::World;
             ImGui::Separator();
             ImGui::MenuItem("Enable Snapping", nullptr, &m_gizmo_snap);
+            ImGui::MenuItem("Show Collider Wireframes", nullptr, &m_show_collider_gizmos);
             ImGui::EndMenu();
         }
 
@@ -856,7 +871,9 @@ void StudioApp::draw_viewport_panel() {
     // Compact toolbar keeps the viewport usable at narrow widths.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 6.0f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.075f, 0.085f, 0.105f, 1.0f));
-    ImGui::BeginChild("ViewportToolbar", ImVec2(0, 43), false, ImGuiWindowFlags_NoScrollbar);
+    const bool compact_toolbar = ImGui::GetContentRegionAvail().x < 700.0f;
+    const float toolbar_height = compact_toolbar ? 2.0f * ImGui::GetFrameHeightWithSpacing() + 12.0f : 43.0f;
+    ImGui::BeginChild("ViewportToolbar", ImVec2(0, toolbar_height), false, ImGuiWindowFlags_HorizontalScrollbar);
     if (m_simulating) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.58f, 0.20f, 0.19f, 1));
     else ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.42f, 0.29f, 1));
     if (ImGui::Button(m_simulating ? "Stop" : "Play")) {
@@ -901,13 +918,16 @@ void StudioApp::draw_viewport_panel() {
         m_select_terrain_tab = true;
     }
     HelpTooltip("Toggle terrain sculpting and open the brush settings.");
-    ImGui::SameLine();
+    if (!compact_toolbar) ImGui::SameLine();
     if (ImGui::Button(m_gizmo_mode == GizmoMode::Local ? "Local" : "World"))
         m_gizmo_mode = (m_gizmo_mode == GizmoMode::Local) ? GizmoMode::World : GizmoMode::Local;
     HelpTooltip("Switch gizmo axes between local object space and world space.");
     ImGui::SameLine();
     ImGui::Checkbox("Snap", &m_gizmo_snap);
     HelpTooltip("Snap gizmo transformations to fixed increments.");
+    ImGui::SameLine();
+    ImGui::Checkbox("Colliders", &m_show_collider_gizmos);
+    HelpTooltip("Display emerald green Jolt physics collider wireframes on selected objects.");
     ImGui::EndChild();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
@@ -974,15 +994,21 @@ void StudioApp::draw_viewport_panel() {
             float aspect = (avail.y > 0.0f) ? (avail.x / avail.y) : 1.777f;
             ComputePerspectiveLH(proj, 60.0f, aspect, 0.1f, 800.0f);
 
-            // Draw glowing 3D selection bounding boxes for all selected objects
+            // Draw glowing 3D selection bounding boxes and collider wireframes for all selected objects
             for (uint32_t sel_id : m_selected_entity_ids) {
                 Entity* ent = m_scene.find_entity(sel_id);
                 if (ent && !ent->is_point_light && !ent->is_group) {
                     draw_selection_bounds(*ent, view, proj, viewportMin.x, viewportMin.y, avail.x, avail.y);
+                    if (m_show_collider_gizmos && ent->physics_type != 0) {
+                        draw_collider_bounds(*ent, view, proj, viewportMin.x, viewportMin.y, avail.x, avail.y);
+                    }
                 }
             }
             if (m_selected_entity_ids.empty() && !sel->is_point_light && !sel->is_group) {
                 draw_selection_bounds(*sel, view, proj, viewportMin.x, viewportMin.y, avail.x, avail.y);
+                if (m_show_collider_gizmos && sel->physics_type != 0) {
+                    draw_collider_bounds(*sel, view, proj, viewportMin.x, viewportMin.y, avail.x, avail.y);
+                }
             }
 
             ImGuizmo::SetOrthographic(false);
@@ -1354,24 +1380,35 @@ void StudioApp::draw_inspector_panel() {
     ImGui::Separator();
 
     if (sel->is_point_light) {
-        ImGui::SeparatorText("Point light");
-        ImGui::Checkbox("Enabled", &sel->visible);
-        DrawVec3Control("Position", sel->position, 0.0f, 0.1f);
-        ImGui::TextUnformatted("Color"); ImGui::SetNextItemWidth(-1);
-        ImGui::ColorEdit3("##LightColor", sel->light_color);
-        ImGui::TextUnformatted("Intensity"); ImGui::SetNextItemWidth(-1);
-        ImGui::DragFloat("##LightIntensity", &sel->light_intensity, 0.5f, 0.0f, 500.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-        HelpTooltip("Brightness of this point light. Point lights currently do not cast shadows.");
-        ImGui::TextUnformatted("Radius"); ImGui::SetNextItemWidth(-1);
-        ImGui::DragFloat("##LightRadius", &sel->light_radius, 0.1f, 0.1f, 100.0f, "%.1f m", ImGuiSliderFlags_AlwaysClamp);
-        HelpTooltip("Maximum distance affected by this point light.");
-        ImGui::TextWrapped("Point lights illuminate objects but do not cast shadows. The sun casts dynamic shadows.");
+        if (ImGui::CollapsingHeader("Transform Component", ImGuiTreeNodeFlags_DefaultOpen)) {
+            DrawVec3Control("Position", sel->position, 0.0f, 0.1f);
+            float wpos[3], wrot[3], wscale[3];
+            ComputeWorldTransform(m_scene, *sel, wpos, wrot, wscale);
+            ImGui::TextDisabled("World: (%.2f, %.2f, %.2f)", wpos[0], wpos[1], wpos[2]);
+            if (ImGui::Button("Snap to Surface (G)", ImVec2(-1, 24))) {
+                snap_selected_to_surface();
+            }
+        }
+        if (ImGui::CollapsingHeader("Point Light Component", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Enabled", &sel->visible);
+            ImGui::SameLine();
+            ImGui::Checkbox("Cast Shadows", &sel->cast_shadow);
+            HelpTooltip("Enable 6-face omnidirectional shadow mapping for this point light (up to the scene's Max Shadowed Lights limit).");
+            ImGui::TextUnformatted("Color"); ImGui::SetNextItemWidth(-1);
+            ImGui::ColorEdit3("##LightColor", sel->light_color);
+            ImGui::TextUnformatted("Intensity"); ImGui::SetNextItemWidth(-1);
+            ImGui::DragFloat("##LightIntensity", &sel->light_intensity, 0.5f, 0.0f, 500.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+            HelpTooltip("Luminous intensity of this point light.");
+            ImGui::TextUnformatted("Radius"); ImGui::SetNextItemWidth(-1);
+            ImGui::DragFloat("##LightRadius", &sel->light_radius, 0.1f, 0.2f, 100.0f, "%.1f m", ImGuiSliderFlags_AlwaysClamp);
+            HelpTooltip("Maximum distance illuminated and shadowed by this point light.");
+        }
         ImGui::End();
         return;
     }
 
-    // Transform with Blender/Unreal style colored axes
-    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Transform Component with Blender/Unreal style colored axes
+    if (ImGui::CollapsingHeader("Transform Component", ImGuiTreeNodeFlags_DefaultOpen)) {
         DrawVec3Control("Position", sel->position, 0.0f, 0.1f);
         DrawVec3Control("Rotation", sel->rotation, 0.0f, 0.5f);
         DrawVec3Control("Scale", sel->scale, 1.0f, 0.05f);
@@ -1386,8 +1423,8 @@ void StudioApp::draw_inspector_panel() {
         HelpTooltip("Snap this object onto the terrain or ground plane.");
     }
 
-    // Rendering
-    if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
+    // Mesh Renderer Component
+    if (ImGui::CollapsingHeader("Mesh Renderer Component", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextUnformatted("Model");
         if (!sel->model_path.empty()) {
             const auto name = path_utf8(std::filesystem::u8path(sel->model_path).filename());
@@ -1446,7 +1483,9 @@ void StudioApp::draw_inspector_panel() {
         if (ImGui::Button("+ New##FromSel", ImVec2(70, 24))) {
             Material new_m{};
             if (cur_mat) new_m = *cur_mat;
-            new_m.id = m_scene.next_material_id++;
+            new_m.id = m_scene.allocate_material_id();
+            if (!new_m.id) { m_asset_message = "No material slots remain."; m_asset_message_pending = true; }
+            else {
             new_m.name = "Material " + std::to_string(new_m.id);
             new_m.is_builtin_preset = false;
             m_scene.materials.push_back(new_m);
@@ -1454,6 +1493,7 @@ void StudioApp::draw_inspector_panel() {
             m_selected_material_id = new_m.id;
             m_show_materials = true;
             ImGui::SetWindowFocus("Materials");
+            }
         }
         HelpTooltip("Create a new custom material based on this one.");
 
@@ -1501,21 +1541,122 @@ void StudioApp::draw_inspector_panel() {
         ImGui::Checkbox("Visible", &sel->visible);
     }
 
-    // Physics
-    if (ImGui::CollapsingHeader("Physics (Jolt)", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const char* p_types[] = { "None", "Static", "Dynamic", "Kinematic" };
-        ImGui::TextUnformatted("Body type"); ImGui::SetNextItemWidth(-1);
+    // Collider & Rigidbody Component (Jolt Physics)
+    if (ImGui::CollapsingHeader("Collider & Rigidbody Component (Jolt)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char* p_types[] = { "None (No Physics)", "Static", "Dynamic (Rigidbody)", "Kinematic" };
+        ImGui::TextUnformatted("Body Type"); ImGui::SetNextItemWidth(-1);
         ImGui::Combo("##BodyType", &sel->physics_type, p_types, IM_ARRAYSIZE(p_types));
 
         const char* shapes[] = { "Box", "Sphere", "Capsule", "Cylinder", "Convex Mesh" };
-        ImGui::TextUnformatted("Collider"); ImGui::SetNextItemWidth(-1);
+        ImGui::TextUnformatted("Collider Shape"); ImGui::SetNextItemWidth(-1);
         ImGui::Combo("##Collider", &sel->collider_shape, shapes, IM_ARRAYSIZE(shapes));
 
         if (sel->physics_type != 0) {
-            ImGui::DragFloat("Mass", &sel->mass, 0.1f, 0.01f, 1000.0f);
+            ImGui::Spacing();
+            DrawVec3Control("Col Size", sel->collider_size, 1.0f, 0.05f);
+            HelpTooltip("Collider scale multiplier relative to the object's Transform scale.");
+            DrawVec3Control("Col Offset", sel->collider_offset, 0.0f, 0.05f);
+            HelpTooltip("Collider center offset relative to the object's pivot.");
+
+            if (ImGui::Button("Reset Collider Bounds", ImVec2(-1, 24))) {
+                sel->collider_size[0] = 1.0f; sel->collider_size[1] = 1.0f; sel->collider_size[2] = 1.0f;
+                sel->collider_offset[0] = 0.0f; sel->collider_offset[1] = 0.0f; sel->collider_offset[2] = 0.0f;
+            }
+            ImGui::Checkbox("Show Collider Wireframes", &m_show_collider_gizmos);
+            ImGui::Spacing();
+            if (sel->physics_type == 2) {
+                ImGui::DragFloat("Mass (kg)", &sel->mass, 0.1f, 0.01f, 1000.0f);
+            }
             ImGui::SliderFloat("Friction", &sel->friction, 0.0f, 1.0f);
             ImGui::SliderFloat("Restitution", &sel->restitution, 0.0f, 1.0f);
         }
+    }
+
+    // Skeletal Animator Component
+    uint32_t anim_count = 0;
+    if (auto* rw = EngineContext::instance().get_render_world()) {
+        anim_count = rw->get_animation_count(sel->mesh_id);
+        if (anim_count > 0 && !sel->has_animator) {
+            sel->has_animator = true;
+        }
+    }
+    if (sel->has_animator || anim_count > 0) {
+        if (ImGui::CollapsingHeader("Skeletal Animator Component", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Enable Animator", &sel->has_animator);
+            ImGui::BeginDisabled(!sel->has_animator);
+
+            auto* rw = EngineContext::instance().get_render_world();
+            if (anim_count > 0 && rw) {
+                sel->anim_clip_index = std::clamp(sel->anim_clip_index, 0, static_cast<int>(anim_count) - 1);
+                std::string cur_clip_name = rw->get_animation_name(sel->mesh_id, static_cast<uint32_t>(sel->anim_clip_index));
+                float cur_clip_dur = rw->get_animation_duration(sel->mesh_id, static_cast<uint32_t>(sel->anim_clip_index));
+                char preview_buf[128];
+                snprintf(preview_buf, sizeof(preview_buf), "[%d] %s (%.2fs)", sel->anim_clip_index,
+                         cur_clip_name.empty() ? "Clip" : cur_clip_name.c_str(), cur_clip_dur);
+
+                ImGui::TextUnformatted("Animation Clip");
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::BeginCombo("##AnimClip", preview_buf)) {
+                    for (uint32_t ci = 0; ci < anim_count; ++ci) {
+                        std::string cname = rw->get_animation_name(sel->mesh_id, ci);
+                        float cdur = rw->get_animation_duration(sel->mesh_id, ci);
+                        char item_buf[128];
+                        snprintf(item_buf, sizeof(item_buf), "[%u] %s (%.2fs)", ci, cname.empty() ? "Clip" : cname.c_str(), cdur);
+                        if (ImGui::Selectable(item_buf, sel->anim_clip_index == static_cast<int>(ci))) {
+                            sel->anim_clip_index = static_cast<int>(ci);
+                            sel->anim_time = 0.0f;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (ImGui::Button(sel->anim_playing ? "Pause" : "Play", ImVec2(90, 26))) {
+                    sel->anim_playing = !sel->anim_playing;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Stop / Reset", ImVec2(100, 26))) {
+                    sel->anim_playing = false;
+                    sel->anim_time = 0.0f;
+                }
+                ImGui::SameLine();
+                ImGui::Checkbox("Loop", &sel->anim_loop);
+
+                ImGui::SliderFloat("Speed", &sel->anim_speed, 0.1f, 3.0f, "%.2fx");
+                if (!sel->anim_playing && cur_clip_dur > 0.001f) {
+                    ImGui::SliderFloat("Timeline (s)", &sel->anim_time, 0.0f, cur_clip_dur, "%.2f s");
+                }
+            } else {
+                ImGui::TextDisabled("No embedded skeletal clips in current mesh (or custom runtime clip index):");
+                ImGui::InputInt("Clip Index", &sel->anim_clip_index);
+                sel->anim_clip_index = std::max(0, sel->anim_clip_index);
+                ImGui::Checkbox("Auto-Play", &sel->anim_playing);
+                ImGui::SameLine();
+                ImGui::Checkbox("Loop", &sel->anim_loop);
+                ImGui::SliderFloat("Speed", &sel->anim_speed, 0.1f, 3.0f, "%.2fx");
+            }
+
+            ImGui::EndDisabled();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (ImGui::Button("+ Add Component", ImVec2(-1, 28))) {
+        ImGui::OpenPopup("AddComponentPopup");
+    }
+    if (ImGui::BeginPopup("AddComponentPopup")) {
+        if (ImGui::MenuItem("Static Collider (Box)", nullptr, false, sel->physics_type == 0)) {
+            sel->physics_type = 1;
+            sel->collider_shape = 0;
+        }
+        if (ImGui::MenuItem("Dynamic Rigidbody (Jolt)", nullptr, false, sel->physics_type != 2)) {
+            sel->physics_type = 2;
+        }
+        if (ImGui::MenuItem("Skeletal Animator", nullptr, false, !sel->has_animator)) {
+            sel->has_animator = true;
+            sel->anim_playing = true;
+        }
+        ImGui::EndPopup();
     }
 
     ImGui::End();
@@ -1729,11 +1870,14 @@ void StudioApp::draw_material_editor_panel() {
     // Top Toolbar
     if (ImGui::Button("+ New Material", ImVec2(120, 26))) {
         Material new_mat;
-        new_mat.id = m_scene.next_material_id++;
+        new_mat.id = m_scene.allocate_material_id();
+        if (!new_mat.id) { m_asset_message = "No material slots remain."; m_asset_message_pending = true; }
+        else {
         new_mat.name = "Custom Material " + std::to_string(new_mat.id);
         new_mat.is_builtin_preset = false;
         m_scene.materials.push_back(new_mat);
         m_selected_material_id = new_mat.id;
+        }
     }
     HelpTooltip("Create a new customizable PBR material.");
     ImGui::SameLine();
@@ -1748,12 +1892,15 @@ void StudioApp::draw_material_editor_panel() {
     if (ImGui::Button("Duplicate", ImVec2(90, 26))) {
         if (active_mat) {
             Material dup = *active_mat;
-            dup.id = m_scene.next_material_id++;
+            dup.id = m_scene.allocate_material_id();
+            if (!dup.id) { m_asset_message = "No material slots remain."; m_asset_message_pending = true; }
+            else {
             dup.name = active_mat->name + " (Copy)";
             dup.is_builtin_preset = false;
             m_scene.materials.push_back(dup);
             m_selected_material_id = dup.id;
             active_mat = m_scene.find_material(m_selected_material_id);
+            }
         }
     }
     HelpTooltip("Duplicate the selected material.");
@@ -1762,16 +1909,12 @@ void StudioApp::draw_material_editor_panel() {
     if (ImGui::Button("Delete", ImVec2(80, 26))) {
         if (active_mat && m_scene.materials.size() > 1) {
             uint32_t del_id = active_mat->id;
-            m_scene.materials.erase(
-                std::remove_if(m_scene.materials.begin(), m_scene.materials.end(),
-                               [del_id](const Material& m) { return m.id == del_id; }),
-                m_scene.materials.end()
-            );
+            m_scene.remove_material(del_id);
             m_selected_material_id = m_scene.materials.empty() ? 0 : m_scene.materials[0].id;
             active_mat = m_scene.find_material(m_selected_material_id);
         }
     }
-    HelpTooltip("Delete this material from the scene.");
+    HelpTooltip("Delete this material and assign affected objects to the first remaining material. Undo restores both.");
     ImGui::EndDisabled();
 
     ImGui::Separator();
@@ -1997,8 +2140,8 @@ void StudioApp::draw_environment_panel() {
         const auto terrain_flags = m_select_terrain_tab ? ImGuiTabItemFlags_SetSelected : 0;
         if (ImGui::BeginTabItem("Terrain", nullptr, terrain_flags)) {
             m_select_terrain_tab = false;
-            ImGui::TextUnformatted("TERRAIN SCULPT");
-            ImGui::TextDisabled("Shape your landscape in the viewport");
+            ImGui::TextUnformatted("TERRAIN SCULPT & PAINT");
+            ImGui::TextDisabled("Shape and paint your landscape in the viewport");
             ImGui::Spacing();
             ImGui::BeginDisabled(m_simulating);
             if (ImGui::Checkbox("Enable terrain", &m_scene.has_terrain)) rebuild_terrain();
@@ -2006,29 +2149,36 @@ void StudioApp::draw_environment_panel() {
             ImGui::EndDisabled();
             if (m_simulating) ImGui::TextWrapped("Stop simulation to edit terrain.");
             if (m_scene.has_terrain) {
+                if (m_scene.terrain_layers.size() < 4) m_scene.init_default_terrain_layers();
                 ImGui::Spacing();
                 ImGui::BeginDisabled(m_simulating);
                 const bool brush_was_enabled = m_terrain_brush_enabled;
                 if (brush_was_enabled) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.43f, 0.68f, 1));
-                if (ImGui::Button(brush_was_enabled ? "Sculpting enabled" : "Enable sculpting", ImVec2(-1, 34)))
+                if (ImGui::Button(brush_was_enabled ? "Brush active (LMB in Viewport)" : "Enable terrain brush", ImVec2(-1, 34)))
                     m_terrain_brush_enabled = !m_terrain_brush_enabled;
                 if (brush_was_enabled) ImGui::PopStyleColor();
-                HelpTooltip("Use the left mouse button in the viewport to sculpt. Turn this off to select objects.");
+                HelpTooltip("Use the left mouse button in the viewport to sculpt or paint. Turn this off to select objects.");
                 ImGui::Spacing();
                 ImGui::TextUnformatted("Brush mode");
-                const char* names[] = { "Raise", "Lower", "Smooth", "Flatten" };
+                const char* names[] = { "Raise", "Lower", "Smooth", "Flatten", "Paint" };
                 const float half_width = std::max(1.0f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < 5; ++i) {
                     if (i % 2) ImGui::SameLine();
                     const bool selected = static_cast<int>(m_terrain_brush_mode) == i;
                     if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.43f, 0.68f, 1));
-                    if (ImGui::Button(names[i], ImVec2(half_width, 32))) {
+                    const float btn_w = (i == 4) ? -1.0f : half_width;
+                    if (ImGui::Button(names[i], ImVec2(btn_w, 32))) {
                         m_terrain_brush_mode = static_cast<TerrainBrushMode>(i);
                         m_terrain_brush_enabled = true;
                     }
                     if (selected) ImGui::PopStyleColor();
-                    const char* help[] = { "Raise terrain under the brush.", "Lower terrain under the brush.",
-                        "Smooth nearby height differences.", "Move heights toward the height sampled at the start of the stroke." };
+                    const char* help[] = {
+                        "Raise terrain under the brush.",
+                        "Lower terrain under the brush.",
+                        "Smooth nearby height differences.",
+                        "Move heights toward the height sampled at the start of the stroke.",
+                        "Paint terrain material layers onto the landscape."
+                    };
                     HelpTooltip(help[i]);
                 }
                 ImGui::Spacing();
@@ -2040,12 +2190,84 @@ void StudioApp::draw_environment_panel() {
                 ImGui::SetNextItemWidth(-1);
                 ImGui::SliderFloat("##BrushStrength", &m_terrain_brush_strength, 0.1f, 20.0f, "%.1f");
                 HelpTooltip("Controls how quickly the brush changes terrain.");
-                ImGui::TextWrapped("Drag on the terrain to sculpt. Flatten uses the height at the start of the stroke.");
+                ImGui::TextWrapped("Drag on the terrain to sculpt or paint. Flatten uses the height at the start of the stroke.");
                 ImGui::BeginDisabled(!m_history.can_undo() || m_terrain_stroke);
                 if (ImGui::Button("Undo   Ctrl+Z", ImVec2(-1, 30))) apply_history(false);
                 HelpTooltip("Undo the most recent scene change. Redo with Ctrl+Y or Ctrl+Shift+Z.");
                 ImGui::EndDisabled();
                 ImGui::Spacing();
+
+                if (ImGui::CollapsingHeader("Material Layers", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::TextDisabled("Select active paint layer or customize colors:");
+                    bool layer_props_changed = false;
+                    for (int li = 0; li < 4; ++li) {
+                        ImGui::PushID(li);
+                        auto& layer = m_scene.terrain_layers[li];
+                        bool is_active_layer = (m_terrain_paint_layer == li && m_terrain_brush_mode == TerrainBrushMode::Paint);
+                        if (is_active_layer) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.48f, 0.32f, 1.0f));
+                        std::string paint_btn = (m_terrain_paint_layer == li ? "[Active] " : "Paint ") + layer.name + "##SelectLayer";
+                        if (ImGui::Button(paint_btn.c_str(), ImVec2(-1, 26))) {
+                            m_terrain_paint_layer = li;
+                            m_terrain_brush_mode = TerrainBrushMode::Paint;
+                            m_terrain_brush_enabled = true;
+                        }
+                        if (is_active_layer) ImGui::PopStyleColor();
+
+                        ImGui::SetNextItemWidth(110.0f);
+                        if (ImGui::ColorEdit3("##LayerCol", layer.color, ImGuiColorEditFlags_NoInputs)) {
+                            layer_props_changed = true;
+                        }
+                        ImGui::SameLine();
+                        char lname[64];
+                        strncpy_s(lname, layer.name.c_str(), sizeof(lname) - 1);
+                        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 75.0f);
+                        if (ImGui::InputText("##LayerName", lname, sizeof(lname))) {
+                            layer.name = lname;
+                        }
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(70.0f);
+                        if (ImGui::DragFloat("##LayerScale", &layer.scale, 0.05f, 0.2f, 4.0f, "x%.1f")) {
+                            layer_props_changed = true;
+                        }
+                        HelpTooltip("Pattern tiling scale for this terrain layer.");
+                        ImGui::Spacing();
+                        ImGui::PopID();
+                    }
+
+                    const bool is_erase = (m_terrain_paint_layer == -1 && m_terrain_brush_mode == TerrainBrushMode::Paint);
+                    if (is_erase) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.32f, 0.18f, 1.0f));
+                    if (ImGui::Button("Erase Paint (Restore Auto-Biome)", ImVec2(-1, 26))) {
+                        m_terrain_paint_layer = -1;
+                        m_terrain_brush_mode = TerrainBrushMode::Paint;
+                        m_terrain_brush_enabled = true;
+                    }
+                    if (is_erase) ImGui::PopStyleColor();
+                    HelpTooltip("Brush erases painted layer weights and restores procedural hypsometric biomes.");
+
+                    if (!m_scene.terrain_splatmap.empty()) {
+                        if (ImGui::Button("Clear All Painted Layers", ImVec2(-1, 24))) {
+                            m_history.observe(m_scene);
+                            m_scene.terrain_splatmap.clear();
+                            if (auto* rw = EngineContext::instance().get_render_world()) {
+                                rw->get_terrain_system().set_splatmap(m_scene.terrain_splatmap);
+                                const float half = m_scene.terrain_world_size * 0.5f;
+                                rw->get_terrain_system().update_albedo(rw->get_device(), rw->get_context(), rw->get_texture_manager(), -half, -half, half, half);
+                            }
+                            m_history.observe(m_scene);
+                        }
+                    }
+
+                    if (layer_props_changed) {
+                        sync_terrain_layers();
+                        if (!m_scene.terrain_splatmap.empty()) {
+                            if (auto* rw = EngineContext::instance().get_render_world()) {
+                                const float half = m_scene.terrain_world_size * 0.5f;
+                                rw->get_terrain_system().update_albedo(rw->get_device(), rw->get_context(), rw->get_texture_manager(), -half, -half, half, half);
+                            }
+                        }
+                    }
+                }
+
                 if (ImGui::CollapsingHeader("Heightmap")) {
                     ImGui::TextWrapped("Import or export grayscale PFM files (32-bit heights in world units). Square maps: 32 to 512 pixels.");
                     if (ImGui::Button("Import heightmap...", ImVec2(-1, 30))) import_heightmap_dialog();
@@ -2055,6 +2277,16 @@ void StudioApp::draw_environment_panel() {
                 }
                 if (ImGui::CollapsingHeader("Terrain generation")) {
                     ImGui::TextDisabled("Changes apply when regenerated.");
+                    ImGui::TextUnformatted("Grid Resolution"); ImGui::SetNextItemWidth(-1);
+                    const char* grid_labels[] = { "64 x 64 (Fast)", "128 x 128 (Standard)", "256 x 256 (High Detail)", "512 x 512 (Ultra Large)" };
+                    const int grid_values[] = { 64, 128, 256, 512 };
+                    int current_grid_idx = 1;
+                    for (int gi = 0; gi < 4; ++gi) {
+                        if (m_terrain_grid_input == grid_values[gi]) { current_grid_idx = gi; break; }
+                    }
+                    if (ImGui::Combo("##TerrainGridSize", &current_grid_idx, grid_labels, 4)) {
+                        m_terrain_grid_input = grid_values[current_grid_idx];
+                    }
                     ImGui::TextUnformatted("Seed"); ImGui::SetNextItemWidth(-1);
                     ImGui::InputInt("##TerrainSeed", &m_terrain_seed_input);
                     ImGui::TextUnformatted("Height scale"); ImGui::SetNextItemWidth(-1);
@@ -2068,10 +2300,12 @@ void StudioApp::draw_environment_panel() {
                     ImGui::TextUnformatted("Save the scene first if you want to keep it.");
                     ImGui::Spacing();
                     if (ImGui::Button("Regenerate", ImVec2(130, 0))) {
+                        m_scene.terrain_grid_size = static_cast<uint32_t>(std::clamp(m_terrain_grid_input, 32, 512));
                         m_scene.terrain_seed = static_cast<uint32_t>(m_terrain_seed_input);
                         m_scene.terrain_height_scale = std::clamp(m_terrain_height_input, 4.0f, 80.0f);
                         m_scene.terrain_world_size = std::clamp(m_terrain_world_input, 60.0f, 600.0f);
                         m_scene.terrain_heights.clear();
+                        m_scene.terrain_splatmap.clear();
                         rebuild_terrain();
                         ImGui::CloseCurrentPopup();
                     }
@@ -2108,23 +2342,46 @@ void StudioApp::draw_environment_panel() {
             }
             if (ImGui::CollapsingHeader("Point lights", ImGuiTreeNodeFlags_DefaultOpen)) {
                 size_t count = 0;
-                for (const auto& entity : m_scene.entities) if (entity.is_point_light) ++count;
-                ImGui::TextDisabled("%zu / 16 lights", count);
+                size_t shadowed_count = 0;
+                for (const auto& entity : m_scene.entities) {
+                    if (entity.is_point_light) {
+                        ++count;
+                        if (entity.visible && entity.cast_shadow) ++shadowed_count;
+                    }
+                }
+                const size_t active_shadowed = std::min<size_t>(shadowed_count, static_cast<size_t>(std::clamp(m_scene.max_shadow_lights, 0, 4)));
+                ImGui::TextDisabled("%zu / 16 lights (%zu / %d casting shadows)", count, active_shadowed, m_scene.max_shadow_lights);
                 if (count > 16) ImGui::TextWrapped("Only the first 16 enabled lights are rendered.");
                 if (ImGui::Button("+ Add point light", ImVec2(-1, 30))) add_point_light();
-                ImGui::TextWrapped("Select a light marker or a light in the hierarchy to edit it.");
+                ImGui::TextWrapped("Select a light marker or a light in the hierarchy to edit color, radius, and shadows.");
             }
-            if (ImGui::CollapsingHeader("Sun shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader("Shadows (Sun CSM & Point Lights)", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Checkbox("Enable shadows", &m_scene.shadows_enabled);
                 ImGui::BeginDisabled(!m_scene.shadows_enabled);
+                ImGui::Checkbox("Cascaded Sun Shadows (2-Cascade CSM)", &m_scene.csm_enabled);
+                HelpTooltip("Split sun shadows into a high-resolution near cascade and a wide far cascade with smooth transition.");
+
+                ImGui::TextUnformatted("Shadow Quality (Atlas Resolution)");
+                const char* q_names[] = { "Low (1024x1024)", "Medium (2048x2048)", "High (4096x4096)" };
+                int q_idx = std::clamp(m_scene.shadow_quality - 1, 0, 2);
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::Combo("##ShadowQuality", &q_idx, q_names, IM_ARRAYSIZE(q_names))) {
+                    m_scene.shadow_quality = q_idx + 1;
+                }
+                HelpTooltip("Controls the GPU shadow atlas resolution for both Sun CSM and Point Light 6-face shadows.");
+
+                ImGui::TextUnformatted("Max Shadowed Point Lights");
+                ImGui::SetNextItemWidth(-1);
+                ImGui::SliderInt("##MaxShadowLights", &m_scene.max_shadow_lights, 0, 4, "%d lights");
+                HelpTooltip("Maximum number of point lights allowed to render 6-face omnidirectional shadows simultaneously (0..4).");
+
                 slider("Shadow strength", &m_scene.shadow_strength, 0.0f, 1.0f);
-                HelpTooltip("Adjust how dark sun shadows appear.");
+                HelpTooltip("Adjust how dark shadows appear.");
                 slider("Shadow softness", &m_scene.shadow_softness, 0.5f, 6.0f);
-                HelpTooltip("Control the filtering radius of sun shadow edges.");
-                slider("Shadow coverage", &m_scene.shadow_coverage, 20.0f, 240.0f);
-                HelpTooltip("Set the world area covered by the sun shadow map. Smaller areas provide more detail.");
+                HelpTooltip("Control the PCF filtering radius of shadow edges.");
+                slider("Near cascade coverage", &m_scene.shadow_coverage, 20.0f, 240.0f);
+                HelpTooltip("Set the world area covered by Cascade 0. Cascade 1 covers 3.2x this area automatically.");
                 ImGui::EndDisabled();
-                ImGui::TextWrapped("Smaller coverage gives sharper nearby shadows.");
             }
             if (ImGui::CollapsingHeader("Atmosphere", ImGuiTreeNodeFlags_DefaultOpen)) {
                 color("Ambient color", m_scene.ambient_color);
@@ -2152,19 +2409,22 @@ void StudioApp::apply_history(bool redo) {
     if (!(redo ? m_history.redo(m_scene) : m_history.undo(m_scene))) return;
     if (previous.has_terrain != m_scene.has_terrain || previous.terrain_grid_size != m_scene.terrain_grid_size ||
         previous.terrain_world_size != m_scene.terrain_world_size || previous.terrain_height_scale != m_scene.terrain_height_scale ||
-        previous.terrain_seed != m_scene.terrain_seed || previous.terrain_heights != m_scene.terrain_heights) {
+        previous.terrain_seed != m_scene.terrain_seed || previous.terrain_heights != m_scene.terrain_heights ||
+        previous.terrain_layers != m_scene.terrain_layers || previous.terrain_splatmap != m_scene.terrain_splatmap) {
         auto* rw = EngineContext::instance().get_render_world();
         auto* pw = EngineContext::instance().get_physics_world();
         const bool same_config = previous.has_terrain && m_scene.has_terrain &&
             previous.terrain_grid_size == m_scene.terrain_grid_size && previous.terrain_world_size == m_scene.terrain_world_size &&
             previous.terrain_height_scale == m_scene.terrain_height_scale && previous.terrain_seed == m_scene.terrain_seed;
-        if (same_config && rw && pw && !m_scene.terrain_heights.empty() &&
-            rw->get_terrain_system().replace_heights(m_scene.terrain_heights)) {
-            rw->update_terrain_mesh(); rw->get_terrain_system().update_collider(*pw);
+        const bool heights_changed = (previous.terrain_heights != m_scene.terrain_heights);
+        if (same_config && rw && pw && (!heights_changed || (!m_scene.terrain_heights.empty() &&
+            rw->get_terrain_system().replace_heights(m_scene.terrain_heights)))) {
+            sync_terrain_layers();
+            rw->get_terrain_system().set_splatmap(m_scene.terrain_splatmap);
             const auto n = m_scene.terrain_grid_size;
             const float cell = m_scene.terrain_world_size / (n - 1), half = m_scene.terrain_world_size * 0.5f;
             uint32_t min_x = n, min_z = n, max_x = 0, max_z = 0;
-            if (previous.terrain_heights.size() == m_scene.terrain_heights.size()) {
+            if (heights_changed && previous.terrain_heights.size() == m_scene.terrain_heights.size()) {
                 for (uint32_t z = 0; z < n; ++z) for (uint32_t x = 0; x < n; ++x) {
                     const size_t i = static_cast<size_t>(z) * n + x;
                     if (previous.terrain_heights[i] != m_scene.terrain_heights[i]) {
@@ -2173,9 +2433,34 @@ void StudioApp::apply_history(bool redo) {
                     }
                 }
             }
-            if (min_x < n) rw->get_terrain_system().update_albedo(rw->get_device(), rw->get_context(), rw->get_texture_manager(),
-                min_x * cell - half, min_z * cell - half, max_x * cell - half, max_z * cell - half);
-            else rw->get_terrain_system().update_albedo(rw->get_device(), rw->get_context(), rw->get_texture_manager(), -half, -half, half, half);
+            if (heights_changed) {
+                if (min_x < n) {
+                    rw->update_terrain_mesh_region(min_x * cell - half, min_z * cell - half, max_x * cell - half, max_z * cell - half);
+                } else {
+                    rw->update_terrain_mesh();
+                }
+                rw->get_terrain_system().update_collider(*pw);
+            }
+            if (previous.terrain_splatmap != m_scene.terrain_splatmap &&
+                previous.terrain_splatmap.size() == m_scene.terrain_splatmap.size() &&
+                m_scene.terrain_splatmap.size() == static_cast<size_t>(n) * n * 4) {
+                for (uint32_t z = 0; z < n; ++z) for (uint32_t x = 0; x < n; ++x) {
+                    const size_t base = (static_cast<size_t>(z) * n + x) * 4;
+                    if (previous.terrain_splatmap[base + 0] != m_scene.terrain_splatmap[base + 0] ||
+                        previous.terrain_splatmap[base + 1] != m_scene.terrain_splatmap[base + 1] ||
+                        previous.terrain_splatmap[base + 2] != m_scene.terrain_splatmap[base + 2] ||
+                        previous.terrain_splatmap[base + 3] != m_scene.terrain_splatmap[base + 3]) {
+                        min_x = std::min(min_x, x); min_z = std::min(min_z, z);
+                        max_x = std::max(max_x, x); max_z = std::max(max_z, z);
+                    }
+                }
+            }
+            if (min_x < n && previous.terrain_layers == m_scene.terrain_layers) {
+                rw->get_terrain_system().update_albedo(rw->get_device(), rw->get_context(), rw->get_texture_manager(),
+                    min_x * cell - half, min_z * cell - half, max_x * cell - half, max_z * cell - half);
+            } else {
+                rw->get_terrain_system().update_albedo(rw->get_device(), rw->get_context(), rw->get_texture_manager(), -half, -half, half, half);
+            }
             m_terrain_albedo_dirty = false;
         } else rebuild_terrain();
     }
@@ -2282,11 +2567,14 @@ void StudioApp::update_terrain_brush(float min_x, float min_y, float width, floa
     const bool active = m_terrain_brush_enabled && m_scene.has_terrain && !m_simulating && terrain.is_generated();
     if (m_terrain_albedo_dirty) {
         m_terrain_albedo_elapsed += m_delta_time;
-        if (m_terrain_albedo_elapsed >= 0.2f) refresh_terrain_albedo();
+        const float interval = (m_terrain_brush_mode == TerrainBrushMode::Paint) ? 0.06f : 0.2f;
+        if (m_terrain_albedo_elapsed >= interval) refresh_terrain_albedo();
     }
     if (m_terrain_stroke && (!active || !ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
         refresh_terrain_albedo();
-        terrain.update_collider(*pw);
+        if (m_terrain_brush_mode != TerrainBrushMode::Paint) {
+            terrain.update_collider(*pw);
+        }
         m_terrain_stroke = false;
         m_terrain_has_previous_hit = false;
     }
@@ -2340,13 +2628,17 @@ void StudioApp::update_terrain_brush(float min_x, float min_y, float width, floa
     };
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->PushClipRect(ImVec2(min_x, min_y), ImVec2(min_x + width, min_y + height), true);
+    ImU32 ring_col = IM_COL32(255, 210, 60, 255);
+    if (m_terrain_brush_mode == TerrainBrushMode::Paint) {
+        ring_col = (m_terrain_paint_layer < 0) ? IM_COL32(255, 130, 80, 255) : IM_COL32(80, 235, 165, 255);
+    }
     ImVec2 last; bool have_last = false;
     for (int i = 0; i <= 64; ++i) {
         const float angle = 6.283185307f * i / 64.0f;
         float x = hit_x + cosf(angle) * m_terrain_brush_radius, z = hit_z + sinf(angle) * m_terrain_brush_radius;
         ImVec2 point;
         bool valid = x >= -half && x <= half && z >= -half && z <= half && project(x, terrain.get_height(x, z) + 0.12f, z, point);
-        if (valid && have_last) draw->AddLine(last, point, IM_COL32(255, 210, 60, 255), 2.0f);
+        if (valid && have_last) draw->AddLine(last, point, ring_col, 2.0f);
         last = point; have_last = valid;
     }
     draw->PopClipRect();
@@ -2361,27 +2653,46 @@ void StudioApp::update_terrain_brush(float min_x, float min_y, float width, floa
         const float from_z = m_terrain_has_previous_hit ? m_terrain_previous_hit[1] : hit_z;
         m_terrain_previous_hit[0] = hit_x; m_terrain_previous_hit[1] = hit_z;
         m_terrain_has_previous_hit = true;
-        auto heights = terrain.heights();
-        if (apply_terrain_brush_segment(heights, cfg.grid_size, cfg.world_size, from_x, from_z, hit_x, hit_z,
-                                        m_terrain_brush_radius, m_terrain_brush_strength,
-                                        std::min(m_delta_time, 0.05f), m_terrain_brush_mode, m_terrain_flatten_height)) {
-            terrain.replace_heights(heights);
-            rw->update_terrain_mesh();
-            const float left = std::min(from_x, hit_x) - m_terrain_brush_radius;
-            const float top = std::min(from_z, hit_z) - m_terrain_brush_radius;
-            const float right = std::max(from_x, hit_x) + m_terrain_brush_radius;
-            const float bottom = std::max(from_z, hit_z) + m_terrain_brush_radius;
-            if (!m_terrain_albedo_dirty) {
-                m_terrain_albedo_bounds[0] = left; m_terrain_albedo_bounds[1] = top;
-                m_terrain_albedo_bounds[2] = right; m_terrain_albedo_bounds[3] = bottom;
-                m_terrain_albedo_dirty = true;
-            } else {
-                m_terrain_albedo_bounds[0] = std::min(m_terrain_albedo_bounds[0], left);
-                m_terrain_albedo_bounds[1] = std::min(m_terrain_albedo_bounds[1], top);
-                m_terrain_albedo_bounds[2] = std::max(m_terrain_albedo_bounds[2], right);
-                m_terrain_albedo_bounds[3] = std::max(m_terrain_albedo_bounds[3], bottom);
+        const float left = std::min(from_x, hit_x) - m_terrain_brush_radius;
+        const float top = std::min(from_z, hit_z) - m_terrain_brush_radius;
+        const float right = std::max(from_x, hit_x) + m_terrain_brush_radius;
+        const float bottom = std::max(from_z, hit_z) + m_terrain_brush_radius;
+
+        if (m_terrain_brush_mode == TerrainBrushMode::Paint) {
+            sync_terrain_layers();
+            if (apply_terrain_paint_segment(terrain.splatmap_mut(), cfg.grid_size, cfg.world_size, from_x, from_z, hit_x, hit_z,
+                                            m_terrain_brush_radius, m_terrain_brush_strength,
+                                            std::min(m_delta_time, 0.05f), m_terrain_paint_layer)) {
+                if (!m_terrain_albedo_dirty) {
+                    m_terrain_albedo_bounds[0] = left; m_terrain_albedo_bounds[1] = top;
+                    m_terrain_albedo_bounds[2] = right; m_terrain_albedo_bounds[3] = bottom;
+                    m_terrain_albedo_dirty = true;
+                } else {
+                    m_terrain_albedo_bounds[0] = std::min(m_terrain_albedo_bounds[0], left);
+                    m_terrain_albedo_bounds[1] = std::min(m_terrain_albedo_bounds[1], top);
+                    m_terrain_albedo_bounds[2] = std::max(m_terrain_albedo_bounds[2], right);
+                    m_terrain_albedo_bounds[3] = std::max(m_terrain_albedo_bounds[3], bottom);
+                }
+                m_scene.terrain_splatmap = terrain.splatmap();
             }
-            m_scene.terrain_heights = std::move(heights);
+        } else {
+            auto& heights = terrain.heights_mut();
+            if (apply_terrain_brush_segment(heights, cfg.grid_size, cfg.world_size, from_x, from_z, hit_x, hit_z,
+                                            m_terrain_brush_radius, m_terrain_brush_strength,
+                                            std::min(m_delta_time, 0.05f), m_terrain_brush_mode, m_terrain_flatten_height)) {
+                rw->update_terrain_mesh_region(left, top, right, bottom);
+                if (!m_terrain_albedo_dirty) {
+                    m_terrain_albedo_bounds[0] = left; m_terrain_albedo_bounds[1] = top;
+                    m_terrain_albedo_bounds[2] = right; m_terrain_albedo_bounds[3] = bottom;
+                    m_terrain_albedo_dirty = true;
+                } else {
+                    m_terrain_albedo_bounds[0] = std::min(m_terrain_albedo_bounds[0], left);
+                    m_terrain_albedo_bounds[1] = std::min(m_terrain_albedo_bounds[1], top);
+                    m_terrain_albedo_bounds[2] = std::max(m_terrain_albedo_bounds[2], right);
+                    m_terrain_albedo_bounds[3] = std::max(m_terrain_albedo_bounds[3], bottom);
+                }
+                m_scene.terrain_heights = heights;
+            }
         }
     }
 }
@@ -2542,6 +2853,123 @@ void StudioApp::draw_selection_bounds(const Entity& entity, const float* view, c
     }
 }
 
+void StudioApp::draw_collider_bounds(const Entity& entity, const float* view, const float* proj, float minX, float minY, float sizeX, float sizeY) {
+    if (entity.is_group || entity.is_point_light || entity.physics_type == 0) return;
+
+    float world_matrix[16];
+    ComputeWorldMatrix(m_scene, entity, world_matrix);
+
+    auto Project = [&](float lx, float ly, float lz, ImVec2& outPt) -> bool {
+        float ox = lx + entity.collider_offset[0];
+        float oy = ly + entity.collider_offset[1];
+        float oz = lz + entity.collider_offset[2];
+
+        float wx = ox * world_matrix[0] + oy * world_matrix[4] + oz * world_matrix[8]  + world_matrix[12];
+        float wy = ox * world_matrix[1] + oy * world_matrix[5] + oz * world_matrix[9]  + world_matrix[13];
+        float wz = ox * world_matrix[2] + oy * world_matrix[6] + oz * world_matrix[10] + world_matrix[14];
+
+        float vx = wx * view[0] + wy * view[4] + wz * view[8]  + view[12];
+        float vy = wx * view[1] + wy * view[5] + wz * view[9]  + view[13];
+        float vz = wx * view[2] + wy * view[6] + wz * view[10] + view[14];
+        float vw = wx * view[3] + wy * view[7] + wz * view[11] + view[15];
+
+        if (vw <= 0.1f) return false;
+
+        float cx = vx * proj[0] + vy * proj[4] + vz * proj[8]  + vw * proj[12];
+        float cy = vx * proj[1] + vy * proj[5] + vz * proj[9]  + vw * proj[13];
+        float cz = vx * proj[2] + vy * proj[6] + vz * proj[10] + vw * proj[14];
+        float cw = vx * proj[3] + vy * proj[7] + vz * proj[11] + vw * proj[15];
+
+        if (cw <= 0.1f) return false;
+
+        float ndcX = cx / cw;
+        float ndcY = cy / cw;
+        if (ndcX < -3.0f || ndcX > 3.0f || ndcY < -3.0f || ndcY > 3.0f) return false;
+
+        outPt.x = minX + (ndcX * 0.5f + 0.5f) * sizeX;
+        outPt.y = minY + (-ndcY * 0.5f + 0.5f) * sizeY;
+        return true;
+    };
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImU32 col = IM_COL32(45, 235, 115, 220);
+
+    float sx = std::max(0.05f, entity.collider_size[0]);
+    float sy = std::max(0.05f, entity.collider_size[1]);
+    float sz = std::max(0.05f, entity.collider_size[2]);
+
+    if (entity.collider_shape == 0) {
+        // Box collider wireframe
+        float hx = 0.5f * sx;
+        float hy = 0.5f * sy;
+        float hz = 0.5f * sz;
+        float corners[8][3] = {
+            { -hx, -hy, -hz }, {  hx, -hy, -hz }, {  hx,  hy, -hz }, { -hx,  hy, -hz },
+            { -hx, -hy,  hz }, {  hx, -hy,  hz }, {  hx,  hy,  hz }, { -hx,  hy,  hz }
+        };
+        ImVec2 pts[8];
+        bool ok[8];
+        for (int i = 0; i < 8; ++i) ok[i] = Project(corners[i][0], corners[i][1], corners[i][2], pts[i]);
+        const int edges[12][2] = {
+            {0, 1}, {1, 2}, {2, 3}, {3, 0},
+            {4, 5}, {5, 6}, {6, 7}, {7, 4},
+            {0, 4}, {1, 5}, {2, 6}, {3, 7}
+        };
+        for (int i = 0; i < 12; ++i) {
+            if (ok[edges[i][0]] && ok[edges[i][1]]) {
+                drawList->AddLine(pts[edges[i][0]], pts[edges[i][1]], col, 1.5f);
+            }
+        }
+    } else if (entity.collider_shape == 1) {
+        // Sphere collider wireframe (3 orthogonal rings)
+        const int kSegs = 24;
+        float r = 0.5f * sx;
+        for (int ring = 0; ring < 3; ++ring) {
+            ImVec2 prevPt;
+            bool prevOk = false;
+            for (int s = 0; s <= kSegs; ++s) {
+                float a = (static_cast<float>(s) / kSegs) * 6.2831853f;
+                float ca = cosf(a) * r;
+                float sa = sinf(a) * r;
+                float lx = (ring == 0) ? ca : (ring == 1 ? ca : 0.0f);
+                float ly = (ring == 0) ? sa : (ring == 1 ? 0.0f : ca);
+                float lz = (ring == 0) ? 0.0f : (ring == 1 ? sa : sa);
+                ImVec2 curPt;
+                bool curOk = Project(lx, ly, lz, curPt);
+                if (prevOk && curOk) drawList->AddLine(prevPt, curPt, col, 1.5f);
+                prevPt = curPt;
+                prevOk = curOk;
+            }
+        }
+    } else {
+        // Capsule / Cylinder wireframe (top & bottom rings + 4 vertical struts)
+        const int kSegs = 20;
+        float r = 0.5f * sx;
+        float hh = 0.5f * sy;
+        for (int cap = -1; cap <= 1; cap += 2) {
+            float y = cap * hh;
+            ImVec2 prevPt;
+            bool prevOk = false;
+            for (int s = 0; s <= kSegs; ++s) {
+                float a = (static_cast<float>(s) / kSegs) * 6.2831853f;
+                ImVec2 curPt;
+                bool curOk = Project(cosf(a) * r, y, sinf(a) * r, curPt);
+                if (prevOk && curOk) drawList->AddLine(prevPt, curPt, col, 1.5f);
+                prevPt = curPt;
+                prevOk = curOk;
+            }
+        }
+        const float dirs[4][2] = { {1.0f, 0.0f}, {-1.0f, 0.0f}, {0.0f, 1.0f}, {0.0f, -1.0f} };
+        for (int d = 0; d < 4; ++d) {
+            ImVec2 p0, p1;
+            if (Project(dirs[d][0] * r, -hh, dirs[d][1] * r, p0) &&
+                Project(dirs[d][0] * r,  hh, dirs[d][1] * r, p1)) {
+                drawList->AddLine(p0, p1, col, 1.5f);
+            }
+        }
+    }
+}
+
 void StudioApp::start_simulation() {
     if (m_simulating) return;
     auto* pw = EngineContext::instance().get_physics_world();
@@ -2549,41 +2977,56 @@ void StudioApp::start_simulation() {
     m_history.observe(m_scene);
     m_simulation_backup = m_scene;
     m_simulation_backup_valid = true;
+    m_sim_backup_cam_pos[0] = m_cam_pos[0];
+    m_sim_backup_cam_pos[1] = m_cam_pos[1];
+    m_sim_backup_cam_pos[2] = m_cam_pos[2];
+    m_sim_backup_cam_yaw = m_cam_yaw;
+    m_sim_backup_cam_pitch = m_cam_pitch;
     m_simulation_bodies.clear();
     m_simulating = true;
 
     for (auto& e : m_scene.entities) {
-        if (e.is_point_light || e.physics_type == 0 || (m_scene.has_terrain && e.editor_grid)) continue;
+        if (e.is_point_light || e.is_group || e.physics_type == 0 || (m_scene.has_terrain && e.editor_grid)) continue;
+
+        float wpos[3], wrot[3], wscale[3], wmat[16];
+        ComputeWorldTransform(m_scene, e, wpos, wrot, wscale, wmat);
 
         RigidBodyDesc desc{};
         desc.shape_type = static_cast<BodyShapeType>(std::clamp(e.collider_shape, 0, 3));
         desc.motion_type = (e.physics_type == 1) ? MotionType::Static :
                            (e.physics_type == 2) ? MotionType::Dynamic : MotionType::Kinematic;
 
-        desc.position[0] = e.position[0];
-        desc.position[1] = e.position[1];
-        desc.position[2] = e.position[2];
+        float ox = e.collider_offset[0];
+        float oy = e.collider_offset[1];
+        float oz = e.collider_offset[2];
+        desc.position[0] = ox * wmat[0] + oy * wmat[4] + oz * wmat[8]  + wmat[12];
+        desc.position[1] = ox * wmat[1] + oy * wmat[5] + oz * wmat[9]  + wmat[13];
+        desc.position[2] = ox * wmat[2] + oy * wmat[6] + oz * wmat[10] + wmat[14];
 
         float qx, qy, qz, qw;
-        EulerToQuat(e.rotation[0], e.rotation[1], e.rotation[2], qx, qy, qz, qw);
+        EulerToQuat(wrot[0], wrot[1], wrot[2], qx, qy, qz, qw);
         desc.rotation[0] = qx;
         desc.rotation[1] = qy;
         desc.rotation[2] = qz;
         desc.rotation[3] = qw;
 
-        if (e.mesh_id == 3 && e.scale[0] > 50.0f) {
+        float csx = std::max(0.05f, e.collider_size[0]);
+        float csy = std::max(0.05f, e.collider_size[1]);
+        float csz = std::max(0.05f, e.collider_size[2]);
+
+        if (e.mesh_id == 3 && wscale[0] > 50.0f) {
             desc.shape_type = BodyShapeType::Box;
             desc.motion_type = MotionType::Static;
-            desc.half_extents[0] = e.scale[0] * 0.5f;
+            desc.half_extents[0] = wscale[0] * csx * 0.5f;
             desc.half_extents[1] = 0.5f;
-            desc.half_extents[2] = e.scale[2] * 0.5f;
+            desc.half_extents[2] = wscale[2] * csz * 0.5f;
             desc.position[1] = -0.5f;
         } else {
-            desc.half_extents[0] = std::max(0.05f, e.scale[0] * 0.5f);
-            desc.half_extents[1] = std::max(0.05f, e.scale[1] * 0.5f);
-            desc.half_extents[2] = std::max(0.05f, e.scale[2] * 0.5f);
-            desc.radius = std::max(0.05f, e.scale[0] * 0.5f);
-            desc.half_height = std::max(0.05f, e.scale[1] * 0.5f);
+            desc.half_extents[0] = std::max(0.05f, wscale[0] * csx * 0.5f);
+            desc.half_extents[1] = std::max(0.05f, wscale[1] * csy * 0.5f);
+            desc.half_extents[2] = std::max(0.05f, wscale[2] * csz * 0.5f);
+            desc.radius = std::max(0.05f, wscale[0] * csx * 0.5f);
+            desc.half_height = std::max(0.05f, wscale[1] * csy * 0.5f);
         }
 
         desc.mass = e.mass;
@@ -2601,14 +3044,23 @@ void StudioApp::stop_simulation() {
     auto* pw = EngineContext::instance().get_physics_world();
     if (pw) for (uint32_t body : m_simulation_bodies) pw->destroy_body(body);
     m_simulation_bodies.clear();
+    EngineContext::instance().particle_clear();
 
     if (m_simulation_backup_valid) {
+        m_cam_pos[0] = m_sim_backup_cam_pos[0];
+        m_cam_pos[1] = m_sim_backup_cam_pos[1];
+        m_cam_pos[2] = m_sim_backup_cam_pos[2];
+        m_cam_yaw = m_sim_backup_cam_yaw;
+        m_cam_pitch = m_sim_backup_cam_pitch;
+
         const bool terrain_changed = m_scene.has_terrain != m_simulation_backup.has_terrain ||
             m_scene.terrain_grid_size != m_simulation_backup.terrain_grid_size ||
             m_scene.terrain_world_size != m_simulation_backup.terrain_world_size ||
             m_scene.terrain_height_scale != m_simulation_backup.terrain_height_scale ||
             m_scene.terrain_seed != m_simulation_backup.terrain_seed ||
-            m_scene.terrain_heights != m_simulation_backup.terrain_heights;
+            m_scene.terrain_heights != m_simulation_backup.terrain_heights ||
+            m_scene.terrain_layers != m_simulation_backup.terrain_layers ||
+            m_scene.terrain_splatmap != m_simulation_backup.terrain_splatmap;
         m_scene = std::move(m_simulation_backup);
         m_simulation_backup_valid = false;
         if (terrain_changed) rebuild_terrain();
@@ -2692,6 +3144,24 @@ void StudioApp::new_scene() {
     m_history.reset(m_scene);
 }
 
+void StudioApp::sync_terrain_layers() {
+    auto* rw = EngineContext::instance().get_render_world();
+    if (!rw) return;
+    if (m_scene.terrain_layers.size() < 4) m_scene.init_default_terrain_layers();
+    std::vector<TerrainLayer> gpu_layers;
+    gpu_layers.reserve(m_scene.terrain_layers.size());
+    for (const auto& l : m_scene.terrain_layers) {
+        TerrainLayer gl{};
+        gl.color[0] = l.color[0];
+        gl.color[1] = l.color[1];
+        gl.color[2] = l.color[2];
+        gl.roughness = l.roughness;
+        gl.scale = l.scale;
+        gpu_layers.push_back(gl);
+    }
+    rw->get_terrain_system().set_layers(gpu_layers);
+}
+
 void StudioApp::rebuild_terrain() {
     m_terrain_albedo_dirty = false;
     m_terrain_albedo_elapsed = 0.0f;
@@ -2701,10 +3171,13 @@ void StudioApp::rebuild_terrain() {
     if (!rw || !pw) return;
     m_terrain_stroke = false;
     m_terrain_has_previous_hit = false;
+    m_terrain_grid_input = static_cast<int>(m_scene.terrain_grid_size);
     m_terrain_seed_input = static_cast<int>(m_scene.terrain_seed);
     m_terrain_height_input = m_scene.terrain_height_scale;
     m_terrain_world_input = m_scene.terrain_world_size;
     if (m_scene.has_terrain) {
+        sync_terrain_layers();
+        rw->get_terrain_system().set_splatmap(m_scene.terrain_splatmap);
         rw->generate_terrain(m_scene.terrain_grid_size, m_scene.terrain_world_size,
             m_scene.terrain_height_scale, m_scene.terrain_seed, *pw,
             m_scene.terrain_heights.empty() ? nullptr : &m_scene.terrain_heights);
@@ -2750,6 +3223,47 @@ void StudioApp::export_heightmap_dialog() {
         MessageBoxA(m_hwnd, error.c_str(), "Heightmap export failed", MB_OK | MB_ICONERROR);
 }
 
+bool StudioApp::export_gamemaker_package(const std::string& export_dir, std::string& out_summary) {
+    if (auto* rw = EngineContext::instance().get_render_world()) {
+        if (m_scene.has_terrain && rw->get_terrain_system().is_generated()) {
+            m_scene.terrain_heights = rw->get_terrain_system().heights();
+            m_scene.terrain_splatmap = rw->get_terrain_system().splatmap();
+        }
+    }
+    return SceneSerializer::export_for_gamemaker(m_scene, export_dir, out_summary);
+}
+
+void StudioApp::export_gamemaker_dialog() {
+    BROWSEINFOW browse{};
+    browse.hwndOwner = m_hwnd;
+    browse.lpszTitle = L"Choose a folder for the GameMaker scene, loader and assets.";
+    browse.ulFlags = BIF_RETURNONLYFSDIRS;
+    PIDLIST_ABSOLUTE selected = SHBrowseForFolderW(&browse);
+    if (!selected) return;
+    wchar_t folder[MAX_PATH]{};
+    const bool resolved = SHGetPathFromIDListW(selected, folder) != FALSE;
+    CoTaskMemFree(selected);
+    if (!resolved) {
+        MessageBoxW(m_hwnd, L"Could not access the selected folder.", L"GameMaker Export", MB_OK | MB_ICONERROR);
+        return;
+    }
+    const std::filesystem::path target_folder(folder);
+    std::error_code ec;
+    if ((std::filesystem::exists(target_folder / L"scene_gm3d.json", ec) ||
+         std::filesystem::exists(target_folder / L"scr_gm3d_load_scene.gml", ec) ||
+         (m_scene.has_terrain && std::filesystem::exists(target_folder / L"terrain.pfm", ec))) &&
+        MessageBoxW(m_hwnd, L"This folder already contains exported scene, loader or terrain files. Replace them?",
+                    L"GameMaker Export", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    std::string export_dir = path_utf8(target_folder);
+    std::string summary;
+    if (export_gamemaker_package(export_dir, summary)) {
+        m_asset_message = summary;
+        m_asset_message_pending = true;
+    } else {
+        MessageBoxA(m_hwnd, summary.c_str(), "GameMaker Export Failed", MB_OK | MB_ICONERROR);
+    }
+}
+
 void StudioApp::open_scene_dialog() {
     wchar_t filename[MAX_PATH] = L"";
     OPENFILENAMEW ofn{};
@@ -2781,8 +3295,37 @@ bool StudioApp::load_scene(const std::string& path) {
             if (!entity.texture_id) missing += "Texture: " + entity.texture_path + "\n";
         }
     }
+    for (auto& material : loaded_scene.materials) {
+        if (!material.albedo_path.empty()) {
+            material.albedo_tex_id = load_asset(material.albedo_path, false);
+            if (!material.albedo_tex_id) missing += "Material albedo: " + material.albedo_path + "\n";
+        }
+        if (!material.normal_path.empty()) {
+            material.normal_tex_id = load_asset(material.normal_path, false);
+            if (!material.normal_tex_id) missing += "Material normal: " + material.normal_path + "\n";
+        }
+    }
+    // Keep missing scene references visible in the asset browser so they can
+    // be relinked even when they were never part of the project registry.
+    bool registered_missing = false;
+    auto register_missing = [&](const std::string& path, bool model, uint16_t id) {
+        if (path.empty() || id != 0) return;
+        const auto it = std::find_if(m_assets.begin(), m_assets.end(), [&](const AssetEntry& item) {
+            return item.is_model == model && _stricmp(item.path.c_str(), path.c_str()) == 0;
+        });
+        if (it == m_assets.end()) { m_assets.push_back({path, 0, model}); registered_missing = true; }
+    };
+    for (const auto& entity : loaded_scene.entities) {
+        register_missing(entity.model_path, true, entity.mesh_id);
+        register_missing(entity.texture_path, false, entity.texture_id);
+    }
+    for (const auto& material : loaded_scene.materials) {
+        register_missing(material.albedo_path, false, material.albedo_tex_id);
+        register_missing(material.normal_path, false, material.normal_tex_id);
+    }
+    if (registered_missing) save_project_registry();
     if (!missing.empty()) {
-        m_asset_message = "Some assets could not be loaded. Their source paths were kept; use Replace in the inspector to relink them.\n\n" + missing;
+        m_asset_message = "Some assets could not be loaded. Their source paths were kept; use the Assets panel to relink them, or replace maps in the Materials panel.\n\n" + missing;
         m_asset_message_pending = true;
     }
     if (m_simulating) stop_simulation();
@@ -2894,6 +3437,14 @@ void StudioApp::relink_asset(size_t index) {
             if (old.is_model) entity.mesh_id = id; else entity.texture_id = id;
         }
     }
+    if (!old.is_model) for (auto& material : m_scene.materials) {
+        if (_stricmp(material.albedo_path.c_str(), old.path.c_str()) == 0) {
+            material.albedo_path = replacement; material.albedo_tex_id = id;
+        }
+        if (_stricmp(material.normal_path.c_str(), old.path.c_str()) == 0) {
+            material.normal_path = replacement; material.normal_tex_id = id;
+        }
+    }
     if (_stricmp(old.path.c_str(), replacement.c_str()) != 0) {
         const auto it = std::find_if(m_assets.begin(), m_assets.end(), [&](const AssetEntry& entry) {
             return entry.is_model == old.is_model && _stricmp(entry.path.c_str(), old.path.c_str()) == 0;
@@ -2996,7 +3547,8 @@ bool StudioApp::add_model_asset(const std::string& path, bool replace_selected) 
 
             for (const auto& gltfMat : extracted_materials) {
                 Material newMat{};
-                newMat.id = m_scene.next_material_id++;
+                newMat.id = m_scene.allocate_material_id();
+                if (!newMat.id) { report += "\nSome materials could not be imported: no material slots remain.\n"; break; }
                 newMat.name = gltfMat.name.empty() ? ("Material_" + std::to_string(newMat.id)) : gltfMat.name;
                 newMat.is_builtin_preset = false;
                 newMat.base_color[0] = gltfMat.base_color[0];
@@ -3325,7 +3877,7 @@ void StudioApp::add_point_light() {
     add_entity(0, "Point Light");
     if (auto* entity = selected_entity()) {
         entity->is_point_light = true;
-        entity->cast_shadow = false;
+        entity->cast_shadow = true;
         entity->physics_type = 0;
         m_terrain_brush_enabled = false;
         m_gizmo_operation = GizmoOperation::Translate;
@@ -3490,12 +4042,10 @@ void StudioApp::set_entity_parent(uint32_t child_id, uint32_t new_parent_id) {
 
     if (child->parent_id == new_parent_id) return;
 
-    float world_matrix[16];
-    ComputeWorldMatrix(m_scene, *child, world_matrix);
-
-    child->parent_id = new_parent_id;
-
-    ComputeLocalTransform(m_scene, new_parent_id, world_matrix, child->position, child->rotation, child->scale);
+    if (!ReparentEntityPreservingWorld(m_scene, child_id, new_parent_id)) {
+        m_asset_message = "Cannot preserve this object's world transform under that parent. Check for zero or rotated non-uniform scale.";
+        m_asset_message_pending = true;
+    }
 }
 
 void StudioApp::group_selected_entities() {
@@ -3701,6 +4251,14 @@ void StudioApp::auto_relink_missing_assets() {
                     if (!asset.is_model && _stricmp(e.texture_path.c_str(), old_path.c_str()) == 0) {
                         e.texture_path = new_path;
                         e.texture_id = id;
+                    }
+                }
+                if (!asset.is_model) for (auto& material : m_scene.materials) {
+                    if (_stricmp(material.albedo_path.c_str(), old_path.c_str()) == 0) {
+                        material.albedo_path = new_path; material.albedo_tex_id = id;
+                    }
+                    if (_stricmp(material.normal_path.c_str(), old_path.c_str()) == 0) {
+                        material.normal_path = new_path; material.normal_tex_id = id;
                     }
                 }
                 ++relinked_count;

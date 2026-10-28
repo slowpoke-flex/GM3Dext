@@ -6,6 +6,7 @@
 #include "TransformMath.h"
 #include "Diagnostics.h"
 #include "Heightmap.h"
+#include "../src/render/AnimationData.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -31,6 +32,69 @@ int main() {
         if (!condition) { std::cerr << message << '\n'; ++failures; }
     };
     auto write = [&](const char* text) { std::ofstream(file) << text; };
+    check(GM3D::animation_sample_time(2.5f, 2.0f, true) == 0.5f &&
+          GM3D::animation_sample_time(2.5f, 2.0f, false) == 2.0f &&
+          GM3D::animation_sample_time(-0.5f, 2.0f, true) == 1.5f &&
+          GM3D::animation_sample_time(-0.5f, 2.0f, false) == 0.0f,
+          "animation loop and clamp sampling failed");
+    {
+        GM3D::SkeletonData skeleton;
+        skeleton.joints.resize(129);
+        std::vector<DirectX::XMFLOAT4X4> matrices;
+        skeleton.evaluate_pose(nullptr, 0.0f, matrices);
+        check(matrices.size() >= skeleton.joints.size(), "large skeleton pose buffer is too small");
+    }
+
+    {
+        const auto export_dir = dir / "export";
+        fs::create_directories(export_dir);
+        std::ofstream(export_dir / "scene_gm3d.json") << "existing package";
+        Scene scene;
+        scene.has_terrain = false;
+        Entity e; e.id = 1; e.model_path = (dir / "missing.obj").string();
+        scene.entities.push_back(e);
+        std::string summary;
+        check(!SceneSerializer::export_for_gamemaker(scene, export_dir.string(), summary) &&
+              summary.find("Missing resource") != std::string::npos, "missing export asset was not reported");
+        std::ifstream existing(export_dir / "scene_gm3d.json");
+        check(std::string((std::istreambuf_iterator<char>(existing)), {}) == "existing package",
+              "missing asset damaged existing export");
+        existing.close();
+        const auto gltf = dir / "external.gltf";
+        std::ofstream(gltf) << R"({"buffers":[{"uri":"mesh.bin"}]})";
+        scene.entities[0].model_path = gltf.string();
+        check(!SceneSerializer::export_for_gamemaker(scene, export_dir.string(), summary) &&
+              summary.find("external resources") != std::string::npos, "external glTF dependency was silently omitted");
+        const auto model = dir / "model.obj";
+        std::ofstream(model) << "# test model\n";
+        scene.entities[0].model_path = model.string();
+        check(SceneSerializer::export_for_gamemaker(scene, export_dir.string(), summary), "valid export failed");
+        Scene exported;
+        check(SceneSerializer::load_from_file(exported, (export_dir / "scene_gm3d.json").string()) &&
+              exported.entities.size() == 1 && fs::exists(fs::u8path(exported.entities[0].model_path)),
+              "exported asset reference did not resolve");
+        scene.has_terrain = true;
+        scene.terrain_grid_size = 32;
+        scene.terrain_heights.assign(32 * 32, 7.0f);
+        scene.terrain_splatmap.assign(32 * 32 * 4, 42);
+        scene.terrain_layers[0].color[0] = 0.73f;
+        check(SceneSerializer::export_for_gamemaker(scene, export_dir.string(), summary), "terrain package export failed");
+        check(SceneSerializer::load_from_file(exported, (export_dir / "scene_gm3d.json").string()) &&
+              exported.terrain_heights == scene.terrain_heights && exported.terrain_splatmap == scene.terrain_splatmap &&
+              exported.terrain_layers == scene.terrain_layers, "terrain package lost sculpting or painting data");
+        std::ifstream script(export_dir / "scr_gm3d_load_scene.gml", std::ios::binary);
+        const std::string loader((std::istreambuf_iterator<char>(script)), {});
+        check(loader.find("terrain_apply_edit_data(buffer_get_address(_terrain_buf), _terrain_bytes)") != std::string::npos &&
+              loader.find("_terrain_inst.mesh_id = GM3D_MESH_TERRAIN") != std::string::npos &&
+              loader.find("buffer_seek(_buf, buffer_seek_end, 0)") != std::string::npos,
+              "export loader is missing terrain restore, visible terrain, or JSON terminator");
+        scene.terrain_layers.resize(1);
+        check(SceneSerializer::export_for_gamemaker(scene, export_dir.string(), summary) &&
+              SceneSerializer::load_from_file(exported, (export_dir / "scene_gm3d.json").string()) &&
+              exported.terrain_layers.size() == 4 && exported.terrain_layers[0] == scene.terrain_layers[0] &&
+              exported.terrain_layers[1] == Scene{}.terrain_layers[1],
+              "export did not preserve partial terrain layers with default fallbacks");
+    }
 
     {
         const auto map = dir / "terrain.pfm";
@@ -137,6 +201,15 @@ int main() {
 
     write("{\"name\":\"Partial\"}");
     check(SceneSerializer::load_from_file(loaded, file.string()), "partial scene failed");
+    {
+        const Scene before = loaded;
+        write("{\"version\":2,\"name\":\"Future\"}");
+        check(!SceneSerializer::load_from_file(loaded, file.string()) && loaded == before,
+              "future scene version was accepted or changed the current scene");
+        write("{\"version\":1,\"materials\":[{\"id\":65536}]}");
+        check(!SceneSerializer::load_from_file(loaded, file.string()) && loaded == before,
+              "out-of-range material ID was accepted or changed the current scene");
+    }
     check(loaded.name == "Partial" && loaded.has_terrain && loaded.entities.empty() &&
           loaded.sun_color[1] == Scene{}.sun_color[1] && loaded.next_entity_id == 1,
           "missing fields did not use scene defaults");
@@ -201,6 +274,16 @@ int main() {
     tiny_history.reset(bounded);
     for (int i = 0; i < 20; ++i) { bounded.name = std::to_string(i); tiny_history.observe(bounded); }
     check(tiny_history.undo(bounded) && bounded.name == "18" && !tiny_history.undo(bounded), "history memory bound failed");
+    Scene painted;
+    painted.terrain_splatmap.assign(256 * 256 * 4, 0);
+    SceneHistory paint_history(600 * 1024);
+    paint_history.reset(painted);
+    for (int i = 1; i <= 4; ++i) {
+        painted.terrain_splatmap[0] = static_cast<uint8_t>(i);
+        paint_history.observe(painted);
+    }
+    check(paint_history.undo(painted) && painted.terrain_splatmap[0] == 3 && !paint_history.undo(painted),
+          "terrain painting was omitted from history memory accounting");
     const float camera[3] = {0, 0, 0};
     const float target[3] = {0, 0, 1};
     float ray[3]{};
@@ -222,6 +305,13 @@ int main() {
         missing_found |= issue.error && issue.code == "missing-asset";
     }
     check(duplicate_found && missing_found, "scene diagnostics missed invalid references or duplicate IDs");
+    Scene missing_material;
+    missing_material.materials[0].normal_path = (dir / "missing-normal.png").string();
+    const auto material_issues = validate_scene(missing_material);
+    bool missing_material_found = false;
+    for (const auto& issue : material_issues)
+        missing_material_found |= issue.error && issue.code == "missing-asset" && issue.detail.find("normal") != std::string::npos;
+    check(missing_material_found, "scene diagnostics missed a missing material map");
     ProjectData project;
     project.filepath = (dir / "test.gm3dproject").string();
     project.last_scene = file.string();
@@ -257,6 +347,20 @@ int main() {
         ComputeWorldTransform(hier_scene, child_ent, world_pos, world_rot, world_scale);
         check(std::abs(world_pos[0] - 10.0f) < 0.001f && std::abs(world_pos[1] - 5.0f) < 0.001f, "child world transform position incorrect");
 
+        Scene reparent = hier_scene;
+        float before[16], after[16];
+        ComputeWorldMatrix(reparent, *reparent.find_entity(11), before);
+        check(ReparentEntityPreservingWorld(reparent, 11, 0), "unparent failed");
+        ComputeWorldMatrix(reparent, *reparent.find_entity(11), after);
+        check(std::abs(before[12] - after[12]) < 0.001f && std::abs(before[13] - after[13]) < 0.001f,
+              "unparent changed world position");
+        reparent.find_entity(10)->scale[0] = 0.0f;
+        const Entity original_child = *reparent.find_entity(11);
+        check(!ReparentEntityPreservingWorld(reparent, 11, 10) && *reparent.find_entity(11) == original_child,
+              "singular parent changed child transform");
+        check(!ReparentEntityPreservingWorld(reparent, 11, 999) && *reparent.find_entity(11) == original_child,
+              "missing parent changed child transform");
+
         // Hierarchy save & load roundtrip
         const auto hier_file = dir / "hier_scene.json";
         check(SceneSerializer::save_to_file(hier_scene, hier_file.string()), "hierarchy scene save failed");
@@ -271,10 +375,36 @@ int main() {
         Scene cycle_scene;
         check(SceneSerializer::load_from_file(cycle_scene, cycle_file.string()), "cycle scene load failed");
         check(!cycle_scene.is_descendant_of(1, 2) || !cycle_scene.is_descendant_of(2, 1), "cycle was not broken on load");
+
+        Scene deep;
+        for (uint32_t i = 1; i <= 300; ++i) {
+            Entity node; node.id = i; node.parent_id = i == 1 ? 0 : i - 1;
+            node.position[0] = 1.0f; deep.entities.push_back(node);
+        }
+        ComputeWorldTransform(deep, deep.entities.back(), world_pos, world_rot, world_scale);
+        check(std::abs(world_pos[0] - 300.0f) < 0.01f && deep.is_descendant_of(300, 1),
+              "deep hierarchy was truncated");
+        deep.entities[0].parent_id = 300;
+        descendants.clear(); deep.get_all_descendants(1, descendants);
+        check(descendants.size() == 299 && !deep.is_descendant_of(1, 999),
+              "cyclic hierarchy traversal did not terminate correctly");
     }
 
     // PBR Materials Serialization & Roundtrip Tests
     {
+        Scene deletion;
+        deletion.next_material_id = 65535;
+        Material last_slot; last_slot.id = 65535; deletion.materials.push_back(last_slot);
+        check(deletion.allocate_material_id() == 9, "material allocator did not reuse a free ID after overflow");
+        Entity using_material; using_material.id = 1; using_material.material_id = 2;
+        deletion.entities.push_back(using_material);
+        SceneHistory deletion_history;
+        deletion_history.reset(deletion);
+        check(deletion.remove_material(2) && deletion.entities[0].material_id == 0,
+              "deleting material left an invalid entity reference");
+        deletion_history.observe(deletion);
+        check(deletion_history.undo(deletion) && deletion.find_material(2) && deletion.entities[0].material_id == 2,
+              "undo did not restore deleted material and assignment");
         Scene mat_scene;
         mat_scene.init_default_materials();
         check(mat_scene.materials.size() == 9, "default materials count mismatch");
@@ -321,6 +451,98 @@ int main() {
         }
         check(loaded_mat_scene.entities.size() == 1 && loaded_mat_scene.entities[0].material_id == custom_mat.id,
               "entity material_id link corrupted");
+    }
+
+    // Terrain Material Layers & Paint Brush Serialization Tests
+    {
+        Scene terr_scene;
+        terr_scene.terrain_grid_size = 32;
+        terr_scene.terrain_world_size = 120.0f;
+        check(terr_scene.terrain_layers.size() == 4, "default terrain layers count mismatch");
+        terr_scene.terrain_layers[3].name = "Volcanic Basalt Path";
+        terr_scene.terrain_layers[3].color[0] = 0.25f;
+        terr_scene.terrain_layers[3].scale = 2.0f;
+
+        // Paint layer 0 and then layer 3 at the origin
+        check(apply_terrain_paint_segment(terr_scene.terrain_splatmap, 32, 120.0f, -10.0f, 0.0f, 10.0f, 0.0f,
+                                          12.0f, 5.0f, 0.1f, 0),
+              "terrain paint brush layer 0 did not modify splatmap");
+        check(terr_scene.terrain_splatmap.size() == 32u * 32u * 4u, "splatmap size mismatch");
+
+        check(apply_terrain_paint_segment(terr_scene.terrain_splatmap, 32, 120.0f, 0.0f, -10.0f, 0.0f, 10.0f,
+                                          12.0f, 8.0f, 0.1f, 3),
+              "terrain paint brush layer 3 did not modify splatmap");
+
+        // Verify weight normalization (sum of RGBA channels <= 255 at every vertex)
+        bool weights_valid = true;
+        bool any_painted = false;
+        for (size_t i = 0; i < 32u * 32u; ++i) {
+            int sum = static_cast<int>(terr_scene.terrain_splatmap[i * 4 + 0]) +
+                      static_cast<int>(terr_scene.terrain_splatmap[i * 4 + 1]) +
+                      static_cast<int>(terr_scene.terrain_splatmap[i * 4 + 2]) +
+                      static_cast<int>(terr_scene.terrain_splatmap[i * 4 + 3]);
+            if (sum > 255) weights_valid = false;
+            if (sum > 0) any_painted = true;
+        }
+        check(weights_valid, "splatmap weights exceeded 255 normalization bound");
+        check(any_painted, "splatmap has no painted weights");
+
+        const auto terr_file = dir / "terr_paint_scene.json";
+        check(SceneSerializer::save_to_file(terr_scene, terr_file.string()), "terrain paint scene save failed");
+
+        Scene loaded_terr;
+        check(SceneSerializer::load_from_file(loaded_terr, terr_file.string()), "terrain paint scene load failed");
+        check(loaded_terr.terrain_layers == terr_scene.terrain_layers, "terrain layers did not round trip");
+        check(loaded_terr.terrain_splatmap == terr_scene.terrain_splatmap, "terrain splatmap did not round trip");
+    }
+
+    // Shadow Quality, CSM, Point Light Shadows & Component Serialization Tests
+    {
+        Scene sh_scene;
+        sh_scene.csm_enabled = false;
+        sh_scene.shadow_quality = 3;
+        sh_scene.max_shadow_lights = 2;
+
+        Entity pl;
+        pl.id = 1;
+        pl.name = "TorchLight";
+        pl.is_point_light = true;
+        pl.cast_shadow = true;
+        pl.light_radius = 18.0f;
+        pl.light_intensity = 42.0f;
+        sh_scene.entities.push_back(pl);
+
+        Entity actor;
+        actor.id = 2;
+        actor.name = "AnimatedKnight";
+        actor.physics_type = 2;
+        actor.collider_shape = 2;
+        actor.collider_size[0] = 0.8f; actor.collider_size[1] = 1.8f; actor.collider_size[2] = 0.8f;
+        actor.collider_offset[1] = 0.9f;
+        actor.has_animator = true;
+        actor.anim_clip_index = 2;
+        actor.anim_speed = 1.35f;
+        actor.anim_loop = false;
+        actor.anim_playing = true;
+        actor.anim_time = 0.75f;
+        sh_scene.entities.push_back(actor);
+
+        const auto sh_file = dir / "shadow_comp_scene.json";
+        check(SceneSerializer::save_to_file(sh_scene, sh_file.string()), "shadow & component scene save failed");
+
+        Scene loaded_sh;
+        check(SceneSerializer::load_from_file(loaded_sh, sh_file.string()), "shadow & component scene load failed");
+        check(loaded_sh.csm_enabled == false, "csm_enabled did not round trip");
+        check(loaded_sh.shadow_quality == 3, "shadow_quality did not round trip");
+        check(loaded_sh.max_shadow_lights == 2, "max_shadow_lights did not round trip");
+        check(loaded_sh.entities.size() == 2, "entities count mismatch");
+        if (loaded_sh.entities.size() == 2) {
+            check(loaded_sh.entities[0].is_point_light && loaded_sh.entities[0].cast_shadow, "point light cast_shadow did not round trip");
+            check(std::abs(loaded_sh.entities[1].collider_size[1] - 1.8f) < 0.001f, "collider_size did not round trip");
+            check(std::abs(loaded_sh.entities[1].collider_offset[1] - 0.9f) < 0.001f, "collider_offset did not round trip");
+            check(loaded_sh.entities[1].has_animator && loaded_sh.entities[1].anim_clip_index == 2, "animator clip_index did not round trip");
+            check(std::abs(loaded_sh.entities[1].anim_speed - 1.35f) < 0.001f && !loaded_sh.entities[1].anim_loop, "animator speed/loop did not round trip");
+        }
     }
 
     fs::remove_all(dir);

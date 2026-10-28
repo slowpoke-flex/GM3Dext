@@ -17,6 +17,12 @@ struct TerrainConfig {
     uint32_t seed = 1337;          // Procedural seed
 };
 
+struct TerrainLayer {
+    float color[3] = { 0.22f, 0.36f, 0.15f };
+    float roughness = 0.78f;
+    float scale = 1.0f;
+};
+
 class TerrainSystem {
 public:
     TerrainSystem() = default;
@@ -28,12 +34,21 @@ public:
                       const TerrainConfig& config, const std::vector<float>* heights = nullptr);
 
     bool update_mesh(ID3D11Device* device, MeshManager& mesh_mgr);
+    bool update_mesh_region(ID3D11Device* device, ID3D11DeviceContext* context, MeshManager& mesh_mgr,
+                            float min_x, float min_z, float max_x, float max_z);
     bool update_albedo(ID3D11Device* device, ID3D11DeviceContext* context, TextureManager& tex_mgr,
                        float min_x, float min_z, float max_x, float max_z, bool create = false);
     bool replace_heights(const std::vector<float>& heights);
+    void set_layers(const std::vector<TerrainLayer>& layers);
+    void set_splatmap(const std::vector<uint8_t>& splatmap);
     void update_collider(PhysicsWorld& physics_world);
     void clear(PhysicsWorld& physics_world);
+
     const std::vector<float>& heights() const noexcept { return m_heights; }
+    std::vector<float>& heights_mut() noexcept { return m_heights; }
+    const std::vector<uint8_t>& splatmap() const noexcept { return m_splatmap; }
+    std::vector<uint8_t>& splatmap_mut() noexcept { return m_splatmap; }
+    const std::vector<TerrainLayer>& layers() const noexcept { return m_layers; }
 
     // Instant O(1) bilinear height query at any world (X, Z) coordinate
     float get_height(float world_x, float world_z) const;
@@ -52,7 +67,11 @@ private:
     TerrainConfig m_config;
     bool m_generated = false;
     uint32_t m_physics_body_id = 0;
-    std::vector<float> m_heights; // grid_size * grid_size samples
+    std::vector<float> m_heights;     // grid_size * grid_size samples
+    std::vector<Vertex3D> m_vertices; // Cached vertex array for fast regional updates
+    std::vector<uint32_t> m_indices;  // Cached index array
+    std::vector<TerrainLayer> m_layers;
+    std::vector<uint8_t> m_splatmap;  // grid_size * grid_size * 4 RGBA layer weights
 };
 
 } // namespace GM3D

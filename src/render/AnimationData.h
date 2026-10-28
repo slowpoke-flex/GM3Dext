@@ -77,6 +77,13 @@ struct AnimationClip {
     std::vector<AnimChannel> channels;
 };
 
+inline float animation_sample_time(float time, float duration, bool loop) {
+    if (duration <= 0.0f) return 0.0f;
+    if (!loop) return std::clamp(time, 0.0f, duration);
+    float wrapped = std::fmod(time, duration);
+    return wrapped < 0.0f ? wrapped + duration : wrapped;
+}
+
 struct JointNode {
     std::string name;
     int parent_index = -1; // -1 for root
@@ -90,11 +97,11 @@ struct SkeletonData {
     std::vector<JointNode> joints;
     std::vector<XMFLOAT4X4> inverse_bind_matrices; // row-major
 
-    void evaluate_pose(const AnimationClip* clip, float time, std::vector<XMFLOAT4X4>& out_skin_matrices) const {
+    void evaluate_pose(const AnimationClip* clip, float time, std::vector<XMFLOAT4X4>& out_skin_matrices, bool loop = true) const {
         size_t count = joints.size();
         if (count == 0) return;
 
-        out_skin_matrices.resize(128);
+        out_skin_matrices.resize(std::max<size_t>(128, count));
         for (size_t b = count; b < 128; ++b) {
             XMStoreFloat4x4(&out_skin_matrices[b], XMMatrixIdentity());
         }
@@ -111,8 +118,7 @@ struct SkeletonData {
         }
 
         if (clip != nullptr && clip->duration > 0.0f) {
-            float anim_time = std::fmod(time, clip->duration);
-            if (anim_time < 0.0f) anim_time += clip->duration;
+            float anim_time = animation_sample_time(time, clip->duration, loop);
 
             for (const auto& ch : clip->channels) {
                 if (ch.joint_index >= 0 && ch.joint_index < (int)count) {

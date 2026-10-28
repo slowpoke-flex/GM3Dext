@@ -153,7 +153,7 @@ endif()
 
 # Standalone diagnostics: no editor window or GPU is required.
 add_executable(GM3DCheck tools/studio/GM3DCheck.cpp tools/studio/Diagnostics.cpp
-    tools/studio/SceneSerializer.cpp tools/studio/ProjectData.cpp)
+    tools/studio/SceneSerializer.cpp tools/studio/ProjectData.cpp tools/studio/Heightmap.cpp)
 target_include_directories(GM3DCheck PRIVATE tools/studio vendor)
 add_executable(GM3DShaderCheck tools/studio/GM3DShaderCheck.cpp)
 target_link_libraries(GM3DShaderCheck PRIVATE d3dcompiler)

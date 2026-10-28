@@ -152,8 +152,8 @@ inline void ComputeWorldMatrix(const Scene& scene, const Entity& entity, float* 
     // Traverse ancestors up to root
     std::vector<const Entity*> chain;
     uint32_t curr = entity.parent_id;
-    int guard = 0;
-    while (curr != 0 && guard++ < 64) {
+    std::unordered_set<uint32_t> visited{entity.id};
+    while (curr != 0 && visited.insert(curr).second) {
         const Entity* p = scene.find_entity(curr);
         if (!p) break;
         chain.push_back(p);
@@ -216,6 +216,50 @@ inline bool ComputeLocalTransform(const Scene& scene, uint32_t parent_id, const 
     MultiplyMatrices(world_matrix, parent_inv, local_matrix);
     DecomposeMatrix(local_matrix, out_pos, out_rot, out_scale);
     return true;
+}
+
+// A TRS transform cannot represent every matrix (for example, shear caused by
+// rotated non-uniform scales). Reject those cases instead of moving the object.
+inline bool ReparentEntityPreservingWorld(Scene& scene, uint32_t child_id, uint32_t parent_id) {
+    Entity* child = scene.find_entity(child_id);
+    if (!child || child_id == parent_id || (parent_id && !scene.find_entity(parent_id)) ||
+        (parent_id && scene.is_descendant_of(parent_id, child_id))) return false;
+    if (child->parent_id == parent_id) return true;
+    float world[16], position[3], rotation[3], scale[3];
+    ComputeWorldMatrix(scene, *child, world);
+    if (!ComputeLocalTransform(scene, parent_id, world, position, rotation, scale)) return false;
+    float local[16], restored[16];
+    BuildMatrix(position, rotation, scale, local);
+    if (parent_id) {
+        float parent_world[16];
+        ComputeWorldMatrix(scene, *scene.find_entity(parent_id), parent_world);
+        MultiplyMatrices(local, parent_world, restored);
+    } else {
+        std::memcpy(restored, local, sizeof(restored));
+    }
+    for (int i = 0; i < 16; ++i)
+        if (!std::isfinite(restored[i]) || std::abs(restored[i] - world[i]) > 0.001f * std::max(1.0f, std::abs(world[i]))) return false;
+    child->parent_id = parent_id;
+    std::memcpy(child->position, position, sizeof(position));
+    std::memcpy(child->rotation, rotation, sizeof(rotation));
+    std::memcpy(child->scale, scale, sizeof(scale));
+    return true;
+}
+
+// Convert Euler (Degrees) to Quaternion (XYZW)
+inline void EulerToQuat(float pitch, float yaw, float roll, float& qx, float& qy, float& qz, float& qw) {
+    float p = pitch * 0.5f * 0.0174532925f;
+    float y = yaw   * 0.5f * 0.0174532925f;
+    float r = roll  * 0.5f * 0.0174532925f;
+
+    float sinP = sinf(p); float cosP = cosf(p);
+    float sinY = sinf(y); float cosY = cosf(y);
+    float sinR = sinf(r); float cosR = cosf(r);
+
+    qx = sinR * cosY * cosP - cosR * sinY * sinP;
+    qy = cosR * sinY * cosP + sinR * cosY * sinP;
+    qz = cosR * cosY * sinP - sinR * sinY * cosP;
+    qw = cosR * cosY * cosP + sinR * sinY * sinP;
 }
 
 } // namespace GM3D::Studio

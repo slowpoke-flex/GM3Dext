@@ -32,3 +32,7 @@ The log is appended and may contain paths to imported resources. It is created o
 ## Terrain heightmaps
 
 The Terrain panel imports and exports grayscale PFM (`Pf`) files with square dimensions from 32 to 512 pixels. Values are 32-bit floating-point world heights; the PFM scale is applied on import. Export uses little-endian floats and includes the generated heightfield even if it has not been sculpted. Import replaces the terrain resolution and heights as one undoable action. Color PFM and PNG heightmaps are not supported.
+
+The GameMaker exporter also includes terrain heights, paint weights and four layer settings in the scene JSON. Its generated loader uses the additive `terrain_apply_edit_data` extension function after `terrain_generate`; it expects the current DLL and matching extension definitions. The packed, little-endian buffer starts with three u32 counts (height floats, weight bytes, layers), followed by f32 heights, RGBA8 weights and five f32 values per layer (RGB, roughness, scale). Counts must be zero or match the terrain resolution, and the layer count must be zero or four. The function returns the updated terrain collider ID or a negative error code. It validates the buffer before changing terrain; as with other native pointer APIs, the caller is responsible for passing a valid buffer address and length.
+
+`GM3DGraphicsSmoke` exercises terrain data restoration through the exported DLL, including a physics raycast and rejection of truncated input. This is not a substitute for compiling and running an exported project in GameMaker LTS.

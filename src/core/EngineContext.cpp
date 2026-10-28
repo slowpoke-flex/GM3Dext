@@ -1,5 +1,7 @@
 #include "EngineContext.h"
 #include <iostream>
+#include <cmath>
+#include <cstring>
 
 EngineContext& EngineContext::instance() {
     static EngineContext s_instance;
@@ -389,7 +391,7 @@ double EngineContext::set_ambient_light(double r, double g, double b, double int
     return GMResult::OK;
 }
 
-double EngineContext::set_point_light(double index, double x, double y, double z, double radius, double r, double g, double b, double intensity) {
+double EngineContext::set_point_light(double index, double x, double y, double z, double radius, double r, double g, double b, double intensity, double cast_shadow) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
     m_render_world->set_point_light(
@@ -397,7 +399,8 @@ double EngineContext::set_point_light(double index, double x, double y, double z
         static_cast<float>(x), static_cast<float>(y), static_cast<float>(z),
         static_cast<float>(radius),
         static_cast<float>(r), static_cast<float>(g), static_cast<float>(b),
-        static_cast<float>(intensity)
+        static_cast<float>(intensity),
+        cast_shadow > 0.5
     );
     return GMResult::OK;
 }
@@ -406,6 +409,29 @@ double EngineContext::clear_point_lights() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
     m_render_world->clear_point_lights();
+    return GMResult::OK;
+}
+
+double EngineContext::set_shadow_settings(double enabled, double strength, double softness, double coverage) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    m_render_world->set_shadow_settings(
+        enabled > 0.5,
+        static_cast<float>(strength),
+        static_cast<float>(softness),
+        static_cast<float>(coverage)
+    );
+    return GMResult::OK;
+}
+
+double EngineContext::set_shadow_quality(double quality, double csm_enabled, double max_shadow_lights) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    m_render_world->set_shadow_quality(
+        static_cast<int>(quality),
+        csm_enabled > 0.5,
+        static_cast<int>(max_shadow_lights)
+    );
     return GMResult::OK;
 }
 
@@ -484,6 +510,54 @@ double EngineContext::terrain_get_height(double x, double z) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_initialized || !m_render_world) return 0.0;
     return static_cast<double>(m_render_world->get_terrain_height(static_cast<float>(x), static_cast<float>(z)));
+}
+
+double EngineContext::terrain_apply_edit_data(const void* data, double size_bytes) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world || !m_physics_world) return GMResult::ERR_NOT_INITIALIZED;
+    auto& terrain = m_render_world->get_terrain_system();
+    if (!terrain.is_generated() || !data || !std::isfinite(size_bytes) || size_bytes < 12 ||
+        size_bytes > 3 * 1024 * 1024 || std::floor(size_bytes) != size_bytes)
+        return GMResult::ERR_INVALID_ARGUMENT;
+
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    uint32_t counts[3];
+    std::memcpy(counts, bytes, sizeof(counts));
+    const size_t samples = static_cast<size_t>(terrain.get_config().grid_size) * terrain.get_config().grid_size;
+    if ((counts[0] != 0 && counts[0] != samples) ||
+        (counts[1] != 0 && counts[1] != samples * 4) || (counts[2] != 0 && counts[2] != 4))
+        return GMResult::ERR_INVALID_ARGUMENT;
+    const size_t expected = sizeof(counts) + size_t(counts[0]) * sizeof(float) + counts[1] + size_t(counts[2]) * 5 * sizeof(float);
+    if (size_bytes != static_cast<double>(expected)) return GMResult::ERR_INVALID_ARGUMENT;
+
+    const uint8_t* cursor = bytes + sizeof(counts);
+    std::vector<float> heights(counts[0]);
+    if (!heights.empty()) std::memcpy(heights.data(), cursor, heights.size() * sizeof(float));
+    cursor += heights.size() * sizeof(float);
+    for (float h : heights) if (!std::isfinite(h)) return GMResult::ERR_INVALID_ARGUMENT;
+    std::vector<uint8_t> splat(cursor, cursor + counts[1]);
+    cursor += counts[1];
+    std::vector<GM3D::TerrainLayer> layers(counts[2]);
+    for (auto& layer : layers) {
+        float values[5];
+        std::memcpy(values, cursor, sizeof(values)); cursor += sizeof(values);
+        for (float value : values) if (!std::isfinite(value)) return GMResult::ERR_INVALID_ARGUMENT;
+        for (size_t i = 0; i < 3; ++i) layer.color[i] = values[i];
+        layer.roughness = values[3]; layer.scale = values[4];
+    }
+
+    if (!heights.empty() && !terrain.replace_heights(heights)) return GMResult::ERR_GENERAL;
+    terrain.set_splatmap(splat);
+    terrain.set_layers(layers);
+    auto* device = m_render_world->get_device();
+    auto* context = m_render_world->get_context();
+    if (!heights.empty() && !terrain.update_mesh(device, m_render_world->get_mesh_manager())) return GMResult::ERR_GENERAL;
+    const float half = terrain.get_config().world_size * 0.5f;
+    if (!terrain.update_albedo(device, context, m_render_world->get_texture_manager(), -half, -half, half, half))
+        return GMResult::ERR_GENERAL;
+    if (!heights.empty()) terrain.update_collider(*m_physics_world);
+    const auto body = terrain.get_physics_body_id();
+    return body ? static_cast<double>(body) : GMResult::ERR_GENERAL;
 }
 
 double EngineContext::anim_play(double entity_id, double anim_index, double speed, double loop) {

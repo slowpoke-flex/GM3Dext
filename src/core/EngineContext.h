@@ -68,8 +68,10 @@ public:
 
     double set_sun_light(double dx, double dy, double dz, double r, double g, double b, double intensity);
     double set_ambient_light(double r, double g, double b, double intensity);
-    double set_point_light(double index, double x, double y, double z, double radius, double r, double g, double b, double intensity);
+    double set_point_light(double index, double x, double y, double z, double radius, double r, double g, double b, double intensity, double cast_shadow = 1.0);
     double clear_point_lights();
+    double set_shadow_settings(double enabled, double strength, double softness, double coverage);
+    double set_shadow_quality(double quality, double csm_enabled, double max_shadow_lights);
     double set_sky_color(double r, double g, double b);
     double set_fog(double start, double end, double r, double g, double b);
     double set_gizmo(double enabled, double x, double y, double z, double sx, double sy, double sz, double axis_len);
@@ -82,6 +84,7 @@ public:
     // Procedural Terrain
     double terrain_generate(double grid_size, double world_size, double height_scale, double seed);
     double terrain_get_height(double x, double z);
+    double terrain_apply_edit_data(const void* data, double size_bytes);
 
     double anim_play(double entity_id, double anim_index, double speed, double loop);
     double anim_stop(double entity_id);
