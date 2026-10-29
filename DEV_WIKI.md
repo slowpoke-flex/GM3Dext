@@ -1073,7 +1073,7 @@ GM3D features a dedicated, native standalone 3D world editor application (**`GM3
 The previous benchmark table was removed: its numbers did not identify a reproducible test scene, hardware or captured measurements. Do not treat performance gains as measured until a fixed scene is profiled before and after changes.
 
 The full development plan is **not complete**. In particular:
-- Compile and run an exported scene in GameMaker LTS with a model, material, painted terrain, light, collider and animation. The generated loader and terrain bridge have native tests but have not passed this end-to-end test.
+- Run an exported scene in GameMaker LTS with a model, material, painted terrain, light, collider and animation. The generated loader compiles with LTS 2026.0.0.23 in a copy of `3DTEST`, and the terrain bridge has native tests, but the complete runtime round trip remains unverified.
 - Check resource import, missing-file relinking, material texture clearing and Undo/Redo in the editor, including project moves and narrow window layouts. Review the remaining UI/UX work.
 - Check Play/Stop restoration, hierarchy transforms, shadows and performance on representative scenes. Add missing coverage where necessary.
 - Research current GMRT source availability, licensing and compatibility independently using current official sources. GMRT integration has not been verified and must not be assumed compatible with the LTS extension.
