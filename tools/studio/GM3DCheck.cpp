@@ -7,14 +7,26 @@
 
 using namespace GM3D::Studio;
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 3 || (std::wstring(argv[1]) != L"scene" && std::wstring(argv[1]) != L"project")) {
-        std::cerr << "Usage: GM3DCheck scene <scene.json> | project <project.gm3dproject>\n";
+    const std::wstring command = argc > 1 ? argv[1] : L"";
+    if (!((argc == 3 && (command == L"scene" || command == L"project")) || (argc == 4 && command == L"export"))) {
+        std::cerr << "Usage: GM3DCheck scene <scene.json> | project <project.gm3dproject> | export <scene.json> <output-folder>\n";
         return 2;
     }
     const auto u = std::filesystem::path(argv[2]).u8string();
     const std::string path(u.begin(), u.end());
     std::vector<Diagnostic> diagnostics;
-    if (std::wstring(argv[1]) == L"scene") {
+    if (command == L"export") {
+        Scene scene;
+        if (!SceneSerializer::load_from_file(scene, path)) { std::cerr << "ERROR [parse] Could not load scene\n"; return 1; }
+        const auto destination = std::filesystem::path(argv[3]).u8string();
+        std::string summary;
+        if (!SceneSerializer::export_for_gamemaker(scene, std::string(destination.begin(), destination.end()), summary)) {
+            std::cerr << "ERROR [export] " << summary << "\n"; return 1;
+        }
+        std::cout << summary << "\n";
+        return 0;
+    }
+    if (command == L"scene") {
         Scene scene;
         if (!SceneSerializer::load_from_file(scene, path)) { std::cerr << "ERROR [parse] Could not load scene\n"; return 1; }
         diagnostics = validate_scene(scene);
