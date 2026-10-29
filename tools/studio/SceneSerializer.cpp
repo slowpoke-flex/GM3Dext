@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <cmath>
 #include <cctype>
+#include <array>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -23,6 +24,23 @@ namespace {
 std::string path_utf8(const std::filesystem::path& path) {
     auto text = path.u8string();
     return std::string(text.begin(), text.end());
+}
+
+bool same_file_contents(const std::filesystem::path& a, const std::filesystem::path& b) {
+    std::error_code ec;
+    const auto size_a = std::filesystem::file_size(a, ec);
+    if (ec) return false;
+    const auto size_b = std::filesystem::file_size(b, ec);
+    if (ec || size_a != size_b) return false;
+    std::ifstream left(a, std::ios::binary), right(b, std::ios::binary);
+    if (!left || !right) return false;
+    std::array<char, 65536> lhs{}, rhs{};
+    while (left && right) {
+        left.read(lhs.data(), lhs.size()); right.read(rhs.data(), rhs.size());
+        if (left.gcount() != right.gcount() ||
+            !std::equal(lhs.begin(), lhs.begin() + left.gcount(), rhs.begin())) return false;
+    }
+    return left.eof() && right.eof() && !left.bad() && !right.bad();
 }
 
 std::string store_asset_path(const std::string& asset, const std::string& scene_file) {
@@ -529,21 +547,23 @@ bool SceneSerializer::export_for_gamemaker(const Scene& scene, const std::string
             std::filesystem::path filename = src.filename();
             std::filesystem::path dst = assets_dir / filename;
             int suffix = 1;
+            bool reuse = false;
             while (std::filesystem::exists(dst, file_ec)) {
                 std::error_code eq_ec;
-                if (std::filesystem::equivalent(src, dst, eq_ec) && !eq_ec) break;
+                if ((std::filesystem::equivalent(src, dst, eq_ec) && !eq_ec) || same_file_contents(src, dst)) {
+                    reuse = true;
+                    break;
+                }
                 dst = assets_dir / (src.stem().u8string() + u8"_" +
                     std::u8string(reinterpret_cast<const char8_t*>(std::to_string(suffix++).c_str())) +
                     src.extension().u8string());
             }
-            std::error_code eq_ec;
-            const bool same_file = std::filesystem::equivalent(src, dst, eq_ec) && !eq_ec;
-            if (!same_file) std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, file_ec);
+            if (!reuse) std::filesystem::copy_file(src, dst, std::filesystem::copy_options::none, file_ec);
             if (!file_ec) {
                 std::string staged_full = path_utf8(dst.lexically_normal());
                 staged_map[asset_path] = staged_full;
                 asset_path = staged_full;
-                ++copied_assets;
+                if (!reuse) ++copied_assets;
                 return true;
             }
             out_summary = "Failed to copy resource: " + asset_path + " (" + file_ec.message() + ")";

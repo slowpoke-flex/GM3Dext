@@ -79,6 +79,20 @@ int main() {
         scene.terrain_splatmap.assign(32 * 32 * 4, 42);
         scene.terrain_layers[0].color[0] = 0.73f;
         check(SceneSerializer::export_for_gamemaker(scene, export_dir.string(), summary), "terrain package export failed");
+        check(std::distance(fs::directory_iterator(export_dir / "assets"), fs::directory_iterator{}) == 1,
+              "repeated export duplicated unchanged assets");
+        const auto other_dir = dir / "other";
+        fs::create_directories(other_dir);
+        const auto other_model = other_dir / "model.obj";
+        std::ofstream(other_model) << "# different model\n";
+        Entity second; second.id = 2; second.model_path = other_model.string();
+        scene.entities.push_back(second);
+        check(SceneSerializer::export_for_gamemaker(scene, export_dir.string(), summary) &&
+              SceneSerializer::load_from_file(exported, (export_dir / "scene_gm3d.json").string()) &&
+              exported.entities.size() == 2 && exported.entities[0].model_path != exported.entities[1].model_path &&
+              std::distance(fs::directory_iterator(export_dir / "assets"), fs::directory_iterator{}) == 2,
+              "different assets sharing a name collided during export");
+        scene.entities.pop_back();
         check(SceneSerializer::load_from_file(exported, (export_dir / "scene_gm3d.json").string()) &&
               exported.terrain_heights == scene.terrain_heights && exported.terrain_splatmap == scene.terrain_splatmap &&
               exported.terrain_layers == scene.terrain_layers, "terrain package lost sculpting or painting data");

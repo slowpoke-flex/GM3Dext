@@ -1085,4 +1085,5 @@ The full development plan is **not complete**. In particular:
 - Reparenting preserves the world transform where representable and refuses invalid, singular or shear-producing cases. Deep hierarchy traversal is cycle guarded.
 - Imported glTF skins with more than 128 joints are rejected because the GPU bone buffer has 128 entries. Loop-disabled animation samples clamp to the final frame. Visual animation and shadow verification remains outstanding.
 - GameMaker export asks for a folder and warns before replacing scene, loader or terrain files. It checks missing resources, but external glTF dependencies are not packaged; use a self-contained GLB. Export is not fully transactional and failures after writing begins can leave a partial package.
+- Repeated exports reuse staged assets with identical content; different files sharing a name receive separate names. Existing unrelated assets are not overwritten.
 - `build/`, DLLs, logs and `scratch/` are ignored by Git. Rebuild the DLL and copy it to the example project when needed; `tools/check.ps1` does not copy it automatically. Never assume a local ignored DLL was pushed.
