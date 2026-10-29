@@ -14,12 +14,15 @@ Standalone checks after building:
 ```powershell
 .\build\GM3DCheck.exe scene "C:\path\scene.json"
 .\build\GM3DCheck.exe project "C:\path\project.gm3dproject"
+.\build\GM3DCheck.exe export "C:\path\scene.json" "C:\path\export-folder"
 .\build\GM3DShaderCheck.exe "C:\GM3Dext"
 .\build\GM3DGraphicsSmoke.exe
 .\build\GM3DTerrainCheck.exe  # built by check.ps1 -Graphics
 ```
 
 `GM3DCheck` reports missing resources, duplicate or invalid IDs, unsupported collider settings and other scene issues. Exit code 0 means no errors (warnings may still be present); 1 means validation or parsing failed; 2 means invalid command arguments. Project checks also validate the last scene if one is configured. Shader checks compile embedded HLSL without launching the editor or creating a graphics device.
+
+The `export` command invokes the same GameMaker exporter as the editor. It can replace an existing scene and loader in the destination folder without a prompt; use a dedicated test folder. It does not generate terrain that is absent from the saved scene.
 
 To capture editor startup and error output in a release build:
 
