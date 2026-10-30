@@ -126,6 +126,7 @@ void PhysicsWorld::shutdown() {
 
     m_id_to_body.clear();
     m_body_to_id.clear();
+    m_body_history.clear();
 
     m_physics_system.reset();
     m_job_system.reset();
@@ -151,11 +152,32 @@ void PhysicsWorld::update(float delta_time) {
 
     m_accumulator += delta_time;
 
-    // Fixed timestep simulation
+    JPH::BodyInterface& bi = m_physics_system->GetBodyInterface();
+
+    // Fixed timestep simulation with transform history recording for smooth interpolation
     while (m_accumulator >= FIXED_TIME_STEP) {
+        for (const auto& pair : m_id_to_body) {
+            auto& h = m_body_history[pair.first];
+            if (!h.has_prev) {
+                h.prev.pos = bi.GetPosition(pair.second);
+                h.prev.rot = bi.GetRotation(pair.second);
+                h.curr = h.prev;
+                h.has_prev = true;
+            } else {
+                h.prev = h.curr;
+            }
+        }
+
         constexpr int collision_steps = 1;
         m_physics_system->Update(FIXED_TIME_STEP, collision_steps, m_temp_allocator.get(), m_job_system.get());
         m_accumulator -= FIXED_TIME_STEP;
+
+        for (const auto& pair : m_id_to_body) {
+            auto& h = m_body_history[pair.first];
+            h.curr.pos = bi.GetPosition(pair.second);
+            h.curr.rot = bi.GetRotation(pair.second);
+            h.has_prev = true;
+        }
     }
 }
 
@@ -289,6 +311,7 @@ bool PhysicsWorld::destroy_body(uint32_t body_id) {
     bi.RemoveBody(jph_body_id);
     bi.DestroyBody(jph_body_id);
 
+    m_body_history.erase(body_id);
     m_body_to_id.erase(jph_body_id.GetIndexAndSequenceNumber());
     m_id_to_body.erase(it);
 
@@ -363,6 +386,7 @@ bool PhysicsWorld::set_position_and_rotation(uint32_t body_id, float x, float y,
     if (it == m_id_to_body.end()) return false;
     JPH::BodyInterface& bi = m_physics_system->GetBodyInterface();
     bi.SetPositionAndRotation(it->second, JPH::RVec3(x, y, z), JPH::Quat(qx, qy, qz, qw), JPH::EActivation::Activate);
+    m_body_history.erase(body_id);
     return true;
 }
 
@@ -409,24 +433,41 @@ void PhysicsWorld::sync_to_shared_entities(SharedEntityData* entities, uint32_t 
     }
 
     JPH::BodyInterface& bi = m_physics_system->GetBodyInterface();
+    const float alpha = std::clamp(m_accumulator / FIXED_TIME_STEP, 0.0f, 1.0f);
 
     for (uint32_t i = 0; i < count; ++i) {
         SharedEntityData& e = entities[i];
         if ((e.flags & EntityFlags::IS_RIGIDBODY) && e.physics_id != 0) {
             auto it = m_id_to_body.find(e.physics_id);
             if (it != m_id_to_body.end()) {
-                JPH::BodyID jph_id = it->second;
-                JPH::RVec3 pos = bi.GetPosition(jph_id);
-                JPH::Quat rot = bi.GetRotation(jph_id);
+                auto hist_it = m_body_history.find(e.physics_id);
+                if (hist_it != m_body_history.end() && hist_it->second.has_prev) {
+                    const auto& h = hist_it->second;
+                    JPH::RVec3 ipos = h.prev.pos + (h.curr.pos - h.prev.pos) * alpha;
+                    JPH::Quat irot = h.prev.rot.SLERP(h.curr.rot, alpha);
 
-                e.px = static_cast<float>(pos.GetX());
-                e.py = static_cast<float>(pos.GetY());
-                e.pz = static_cast<float>(pos.GetZ());
+                    e.px = static_cast<float>(ipos.GetX());
+                    e.py = static_cast<float>(ipos.GetY());
+                    e.pz = static_cast<float>(ipos.GetZ());
 
-                e.qx = rot.GetX();
-                e.qy = rot.GetY();
-                e.qz = rot.GetZ();
-                e.qw = rot.GetW();
+                    e.qx = irot.GetX();
+                    e.qy = irot.GetY();
+                    e.qz = irot.GetZ();
+                    e.qw = irot.GetW();
+                } else {
+                    JPH::BodyID jph_id = it->second;
+                    JPH::RVec3 pos = bi.GetPosition(jph_id);
+                    JPH::Quat rot = bi.GetRotation(jph_id);
+
+                    e.px = static_cast<float>(pos.GetX());
+                    e.py = static_cast<float>(pos.GetY());
+                    e.pz = static_cast<float>(pos.GetZ());
+
+                    e.qx = rot.GetX();
+                    e.qy = rot.GetY();
+                    e.qz = rot.GetZ();
+                    e.qw = rot.GetW();
+                }
             }
         }
     }

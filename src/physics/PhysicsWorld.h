@@ -151,7 +151,18 @@ private:
     ObjectLayerPairFilterImpl          m_obj_layer_pair_filter;
     ContactListenerImpl                m_contact_listener;
 
+    struct TransformSample {
+        JPH::RVec3 pos = JPH::RVec3::sZero();
+        JPH::Quat  rot = JPH::Quat::sIdentity();
+    };
+    struct BodyHistory {
+        TransformSample prev;
+        TransformSample curr;
+        bool has_prev = false;
+    };
+
     std::unordered_map<uint32_t, JPH::BodyID> m_id_to_body;
     std::unordered_map<uint32_t, uint32_t>    m_body_to_id;
+    std::unordered_map<uint32_t, BodyHistory> m_body_history;
     uint32_t m_next_handle_id = 1;
 };
