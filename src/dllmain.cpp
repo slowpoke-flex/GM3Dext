@@ -607,3 +607,27 @@ GM_EXPORT double GM_CALL grass_get_count() {
         return 0.0;
     }
 }
+
+GM_EXPORT double GM_CALL grass_clear() {
+    try {
+        return EngineContext::instance().grass_clear();
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL grass_load_file(const char* filepath) {
+    try {
+        return EngineContext::instance().grass_load_file(filepath);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL grass_save_file(const char* filepath) {
+    try {
+        return EngineContext::instance().grass_save_file(filepath);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}

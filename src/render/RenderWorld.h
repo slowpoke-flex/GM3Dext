@@ -163,6 +163,13 @@ public:
             m_grass_system.build_from_terrain(m_device.Get(), m_terrain_system, cfg);
         }
     }
+    void clear_grass() { m_grass_system.clear(); }
+    bool load_grass_file(const std::string& filepath) {
+        return m_grass_system.load_from_file(filepath, m_device.Get());
+    }
+    bool save_grass_file(const std::string& filepath) const {
+        return m_grass_system.save_to_file(filepath);
+    }
     GM3D::GrassSystem& get_grass_system() { return m_grass_system; }
     const GM3D::GrassSystem& get_grass_system() const { return m_grass_system; }
 

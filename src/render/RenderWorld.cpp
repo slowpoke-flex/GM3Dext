@@ -2556,8 +2556,8 @@ uint32_t RenderWorld::generate_terrain(uint32_t grid_size, float world_size, flo
     cfg.height_scale = height_scale;
     cfg.seed = seed;
     uint32_t body_id = m_terrain_system.generate(m_device.Get(), m_context.Get(), m_mesh_manager, m_texture_manager, physics_world, cfg, heights);
-    if (m_terrain_system.is_generated() && m_grass_system.is_enabled()) {
-        m_grass_system.build_from_terrain(m_device.Get(), m_terrain_system);
+    if (m_terrain_system.is_generated() && m_grass_system.get_instance_count() > 0) {
+        m_grass_system.snap_to_terrain(m_terrain_system, m_device.Get());
     }
     return body_id;
 }

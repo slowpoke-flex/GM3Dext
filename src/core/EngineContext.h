@@ -91,6 +91,9 @@ public:
     double grass_set_wind(double dir_x, double dir_z, double speed, double strength);
     double grass_rebuild(double density, double seed);
     double grass_get_count();
+    double grass_clear();
+    double grass_load_file(const char* filepath);
+    double grass_save_file(const char* filepath);
 
     double anim_play(double entity_id, double anim_index, double speed, double loop);
     double anim_stop(double entity_id);

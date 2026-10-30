@@ -94,6 +94,23 @@ struct Entity {
     float anim_time = 0.0f;
 };
 
+struct SceneGrassClump {
+    bool operator==(const SceneGrassClump&) const = default;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    float rot = 0.0f;
+    float sx = 0.22f, sy = 0.85f;
+    float r = 0.22f, g = 0.38f, b = 0.15f;
+};
+
+struct SceneGrassBinaryInstance {
+    float px = 0.0f, py = 0.0f, pz = 0.0f;
+    float rotation = 0.0f;
+    float scale_x = 0.22f, scale_y = 0.85f;
+    float wind_phase = 0.0f;
+    float r = 0.22f, g = 0.38f, b = 0.15f;
+    float pad[2] = { 0.0f, 0.0f };
+};
+
 struct Scene {
     bool operator==(const Scene&) const = default;
     std::string name = "Untitled Scene";
@@ -243,8 +260,8 @@ struct Scene {
     std::vector<TerrainMaterialLayer> terrain_layers;
     std::vector<uint8_t> terrain_splatmap; // grid_size * grid_size * 4 RGBA weights (empty = unpainted)
 
-    // Procedural Grass & Foliage
-    bool grass_enabled = true;
+    // Procedural Grass & Foliage (Brushed / Painted)
+    bool grass_enabled = false;
     float grass_density = 1.0f;
     float grass_height = 0.85f;
     float grass_width = 0.22f;
@@ -253,6 +270,7 @@ struct Scene {
     float grass_wind_speed = 1.8f;
     float grass_wind_strength = 0.35f;
     float grass_wind_dir[2] = { 0.707f, 0.707f };
+    std::vector<SceneGrassClump> grass_clumps;
 
     Entity* find_entity(uint32_t id) {
         for (auto& e : entities) {

@@ -13,7 +13,7 @@ struct SceneConstantBuffer;
 namespace GM3D {
 
 struct GrassConfig {
-    bool enabled = true;
+    bool enabled = false;           // Default: disabled/absent until painted
     float density = 1.0f;           // Density multiplier (0.1 to 3.0)
     float base_height = 0.85f;      // Clump height in meters
     float base_width = 0.22f;       // Clump width in meters
@@ -82,6 +82,22 @@ public:
     void set_enabled(bool enabled) noexcept { m_config.enabled = enabled; }
     [[nodiscard]] bool is_enabled() const noexcept { return m_config.enabled && m_instance_count > 0; }
 
+    void clear();
+    void set_instances(const std::vector<GrassGPUInstance>& instances, ID3D11Device* device);
+    [[nodiscard]] const std::vector<GrassGPUInstance>& get_instances() const noexcept { return m_instances; }
+    [[nodiscard]] std::vector<GrassGPUInstance>& get_instances_mut() noexcept { return m_instances; }
+
+    uint32_t paint_brush(float hit_x, float hit_z, float radius, float density, float dt,
+                         const TerrainSystem& terrain, float base_w, float base_h,
+                         const float tint[3], ID3D11Device* device);
+
+    uint32_t erase_brush(float hit_x, float hit_z, float radius, ID3D11Device* device);
+
+    void snap_to_terrain(const TerrainSystem& terrain, ID3D11Device* device);
+
+    bool save_to_file(const std::string& filepath) const;
+    bool load_from_file(const std::string& filepath, ID3D11Device* device);
+
     void set_wind(float dir_x, float dir_z, float speed, float strength) noexcept {
         m_config.wind_dir[0] = dir_x;
         m_config.wind_dir[1] = dir_z;
@@ -98,6 +114,8 @@ private:
     GrassConfig m_config;
     uint32_t m_instance_count = 0;
     std::vector<GrassGPUInstance> m_instances;
+    float m_brush_accum = 0.0f;
+    uint32_t m_brush_seed = 12345u;
 
     // Direct3D 11 Resources
     ComPtr<ID3D11Buffer>             m_vertex_buffer;
