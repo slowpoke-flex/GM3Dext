@@ -2478,6 +2478,77 @@ void StudioApp::draw_environment_panel() {
                     if (ImGui::Button("Cancel", ImVec2(100, 0))) ImGui::CloseCurrentPopup();
                     ImGui::EndPopup();
                 }
+
+                // Procedural Grass & Foliage Controls
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                if (ImGui::CollapsingHeader("Procedural Grass & Foliage", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    auto* rw_ui = EngineContext::instance().get_render_world();
+                    uint32_t blade_count = rw_ui ? rw_ui->get_grass_system().get_instance_count() : 0;
+                    ImGui::TextDisabled("Active grass clumps: %u", blade_count);
+
+                    bool grass_toggled = ImGui::Checkbox("Enable Grass", &m_scene.grass_enabled);
+                    if (grass_toggled && rw_ui) {
+                        rw_ui->set_grass_enabled(m_scene.grass_enabled);
+                    }
+                    HelpTooltip("Toggle procedural instanced 3D grass across terrain.");
+
+                    if (m_scene.grass_enabled) {
+                        bool rebuild_needed = false;
+                        ImGui::TextUnformatted("Density");
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::SliderFloat("##GrassDensity", &m_scene.grass_density, 0.2f, 2.5f, "%.2fx")) {
+                            rebuild_needed = true;
+                        }
+
+                        ImGui::TextUnformatted("Height");
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::SliderFloat("##GrassHeight", &m_scene.grass_height, 0.3f, 2.0f, "%.2f m")) {
+                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().base_height = m_scene.grass_height;
+                        }
+
+                        ImGui::TextUnformatted("Clump Width");
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::SliderFloat("##GrassWidth", &m_scene.grass_width, 0.1f, 0.6f, "%.2f m")) {
+                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().base_width = m_scene.grass_width;
+                        }
+
+                        ImGui::TextUnformatted("Visibility Distance");
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::SliderFloat("##GrassMaxDist", &m_scene.grass_max_distance, 40.0f, 180.0f, "%.0f m")) {
+                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().max_distance = m_scene.grass_max_distance;
+                        }
+
+                        ImGui::TextUnformatted("Wind Sway Speed");
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::SliderFloat("##GrassWindSpeed", &m_scene.grass_wind_speed, 0.5f, 5.0f, "%.1fx")) {
+                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().wind_speed = m_scene.grass_wind_speed;
+                        }
+
+                        ImGui::TextUnformatted("Wind Strength");
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::SliderFloat("##GrassWindStrength", &m_scene.grass_wind_strength, 0.05f, 1.0f, "%.2f")) {
+                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().wind_strength = m_scene.grass_wind_strength;
+                        }
+
+                        if (ImGui::Button("Rebuild Grass Instances", ImVec2(-1, 28))) {
+                            rebuild_needed = true;
+                        }
+
+                        if (rebuild_needed && rw_ui) {
+                            GM3D::GrassConfig gcfg = rw_ui->get_grass_system().get_config();
+                            gcfg.enabled = m_scene.grass_enabled;
+                            gcfg.density = m_scene.grass_density;
+                            gcfg.base_height = m_scene.grass_height;
+                            gcfg.base_width = m_scene.grass_width;
+                            gcfg.max_distance = m_scene.grass_max_distance;
+                            gcfg.wind_speed = m_scene.grass_wind_speed;
+                            gcfg.wind_strength = m_scene.grass_wind_strength;
+                            rw_ui->get_grass_system().build_from_terrain(rw_ui->get_device(), rw_ui->get_terrain_system(), gcfg);
+                        }
+                    }
+                }
                 ImGui::EndDisabled();
             } else {
                 ImGui::Spacing();
@@ -3364,8 +3435,21 @@ void StudioApp::rebuild_terrain() {
         rw->generate_terrain(m_scene.terrain_grid_size, m_scene.terrain_world_size,
             m_scene.terrain_height_scale, m_scene.terrain_seed, *pw,
             m_scene.terrain_heights.empty() ? nullptr : &m_scene.terrain_heights);
+        GM3D::GrassConfig gcfg = rw->get_grass_system().get_config();
+        gcfg.enabled = m_scene.grass_enabled;
+        gcfg.density = m_scene.grass_density;
+        gcfg.base_height = m_scene.grass_height;
+        gcfg.base_width = m_scene.grass_width;
+        gcfg.max_distance = m_scene.grass_max_distance;
+        gcfg.fade_range = m_scene.grass_fade_range;
+        gcfg.wind_speed = m_scene.grass_wind_speed;
+        gcfg.wind_strength = m_scene.grass_wind_strength;
+        gcfg.wind_dir[0] = m_scene.grass_wind_dir[0];
+        gcfg.wind_dir[1] = m_scene.grass_wind_dir[1];
+        rw->get_grass_system().build_from_terrain(rw->get_device(), rw->get_terrain_system(), gcfg);
     } else {
         rw->get_terrain_system().clear(*pw);
+        rw->get_grass_system().shutdown();
     }
 }
 

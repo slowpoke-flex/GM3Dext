@@ -38,6 +38,8 @@ set(GM3D_CORE_SOURCES
     src/render/ParticleManager.h
     src/render/TerrainSystem.cpp
     src/render/TerrainSystem.h
+    src/render/GrassSystem.cpp
+    src/render/GrassSystem.h
 )
 
 # DLL Library for GameMaker

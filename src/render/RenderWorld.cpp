@@ -839,6 +839,10 @@ bool RenderWorld::initialize(const RenderConfig& config) {
         return false;
     }
 
+    if (!m_grass_system.initialize(m_device.Get())) {
+        std::cerr << "Warning: Failed to initialize GrassSystem" << std::endl;
+    }
+
     if (!init_post_processing_resources()) {
         std::cerr << "Warning: Failed to initialize HDR post-processing resources" << std::endl;
     }
@@ -852,6 +856,7 @@ void RenderWorld::shutdown() {
         return;
     }
 
+    m_grass_system.shutdown();
     m_particle_manager.shutdown();
     m_texture_manager.cleanup();
     m_mesh_manager.shutdown();
@@ -1941,6 +1946,12 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
         draw_batch_items(inst_list, key.mesh_id, key.material_id, key.texture_id);
     }
 
+    // Render Procedural Grass & Foliage System
+    if (m_grass_system.is_enabled()) {
+        float interaction[4] = { header.camera_target[0], header.camera_target[1], header.camera_target[2], 2.2f };
+        m_grass_system.render(m_context.Get(), m_cached_scene_cb, header.camera_pos, m_total_time, interaction);
+    }
+
     // Restore standard blend state
     m_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
 
@@ -2544,7 +2555,11 @@ uint32_t RenderWorld::generate_terrain(uint32_t grid_size, float world_size, flo
     cfg.world_size = world_size;
     cfg.height_scale = height_scale;
     cfg.seed = seed;
-    return m_terrain_system.generate(m_device.Get(), m_context.Get(), m_mesh_manager, m_texture_manager, physics_world, cfg, heights);
+    uint32_t body_id = m_terrain_system.generate(m_device.Get(), m_context.Get(), m_mesh_manager, m_texture_manager, physics_world, cfg, heights);
+    if (m_terrain_system.is_generated() && m_grass_system.is_enabled()) {
+        m_grass_system.build_from_terrain(m_device.Get(), m_terrain_system);
+    }
+    return body_id;
 }
 
 float RenderWorld::get_terrain_height(float world_x, float world_z) const {

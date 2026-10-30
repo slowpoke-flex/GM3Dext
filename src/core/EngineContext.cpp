@@ -614,3 +614,31 @@ double EngineContext::raycast(double fx, double fy, double fz, double tx, double
     return m_last_raycast.has_hit ? static_cast<double>(m_last_raycast.body_id) : 0.0;
 }
 
+
+double EngineContext::grass_set_enabled(double enabled) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    m_render_world->set_grass_enabled(enabled > 0.5);
+    return GMResult::OK;
+}
+
+double EngineContext::grass_set_wind(double dir_x, double dir_z, double speed, double strength) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    m_render_world->set_grass_wind(static_cast<float>(dir_x), static_cast<float>(dir_z),
+                                   static_cast<float>(speed), static_cast<float>(strength));
+    return GMResult::OK;
+}
+
+double EngineContext::grass_rebuild(double density, double seed) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    m_render_world->rebuild_grass(static_cast<float>(density), static_cast<uint32_t>(seed));
+    return GMResult::OK;
+}
+
+double EngineContext::grass_get_count() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return 0.0;
+    return static_cast<double>(m_render_world->get_grass_system().get_instance_count());
+}
