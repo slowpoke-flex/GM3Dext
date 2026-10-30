@@ -243,6 +243,17 @@ struct Scene {
     std::vector<TerrainMaterialLayer> terrain_layers;
     std::vector<uint8_t> terrain_splatmap; // grid_size * grid_size * 4 RGBA weights (empty = unpainted)
 
+    // Procedural Grass & Foliage
+    bool grass_enabled = true;
+    float grass_density = 1.0f;
+    float grass_height = 0.85f;
+    float grass_width = 0.22f;
+    float grass_max_distance = 95.0f;
+    float grass_fade_range = 25.0f;
+    float grass_wind_speed = 1.8f;
+    float grass_wind_strength = 0.35f;
+    float grass_wind_dir[2] = { 0.707f, 0.707f };
+
     Entity* find_entity(uint32_t id) {
         for (auto& e : entities) {
             if (e.id == id) return &e;

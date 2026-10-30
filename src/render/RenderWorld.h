@@ -5,6 +5,7 @@
 #include "TextureManager.h"
 #include "ParticleManager.h"
 #include "TerrainSystem.h"
+#include "GrassSystem.h"
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
@@ -148,6 +149,23 @@ public:
     }
     float get_terrain_height(float world_x, float world_z) const;
 
+    // Procedural Grass & Foliage System
+    void set_grass_enabled(bool enabled) { m_grass_system.set_enabled(enabled); }
+    [[nodiscard]] bool is_grass_enabled() const { return m_grass_system.is_enabled(); }
+    void set_grass_wind(float dir_x, float dir_z, float speed, float strength) {
+        m_grass_system.set_wind(dir_x, dir_z, speed, strength);
+    }
+    void rebuild_grass(float density = 1.0f, uint32_t seed = 4242) {
+        if (m_terrain_system.is_generated()) {
+            GM3D::GrassConfig cfg = m_grass_system.get_config();
+            cfg.density = density;
+            cfg.seed = seed;
+            m_grass_system.build_from_terrain(m_device.Get(), m_terrain_system, cfg);
+        }
+    }
+    GM3D::GrassSystem& get_grass_system() { return m_grass_system; }
+    const GM3D::GrassSystem& get_grass_system() const { return m_grass_system; }
+
     // Studio & Editor Accessors
     ID3D11Device* get_device() const { return m_device.Get(); }
     ID3D11DeviceContext* get_context() const { return m_context.Get(); }
@@ -243,6 +261,7 @@ private:
     GM3D::TextureManager m_texture_manager;
     ParticleManager m_particle_manager;
     GM3D::TerrainSystem m_terrain_system;
+    GM3D::GrassSystem m_grass_system;
     uint32_t m_max_instances = 10000;
     GizmoData m_gizmo{};
 

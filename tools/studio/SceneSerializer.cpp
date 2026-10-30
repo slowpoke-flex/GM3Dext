@@ -98,13 +98,21 @@ bool SceneSerializer::save_to_file(const Scene& scene, const std::string& filepa
             {"end", scene.fog_end}
         };
 
-        // Terrain
+        // Terrain & Foliage
         j["terrain"] = {
             {"enabled", scene.has_terrain},
             {"grid_size", scene.terrain_grid_size},
             {"world_size", scene.terrain_world_size},
             {"height_scale", scene.terrain_height_scale},
-            {"seed", scene.terrain_seed}
+            {"seed", scene.terrain_seed},
+            {"grass_enabled", scene.grass_enabled},
+            {"grass_density", scene.grass_density},
+            {"grass_height", scene.grass_height},
+            {"grass_width", scene.grass_width},
+            {"grass_max_distance", scene.grass_max_distance},
+            {"grass_fade_range", scene.grass_fade_range},
+            {"grass_wind_speed", scene.grass_wind_speed},
+            {"grass_wind_strength", scene.grass_wind_strength}
         };
 
         if (!scene.terrain_heights.empty()) j["terrain"]["heights"] = scene.terrain_heights;
@@ -304,6 +312,14 @@ bool SceneSerializer::load_from_file(Scene& scene, const std::string& filepath) 
             loaded.terrain_world_size = terr.value("world_size", 240.0f);
             loaded.terrain_height_scale = terr.value("height_scale", 32.0f);
             loaded.terrain_seed = terr.value("seed", 1337u);
+            loaded.grass_enabled = terr.value("grass_enabled", true);
+            loaded.grass_density = terr.value("grass_density", 1.0f);
+            loaded.grass_height = terr.value("grass_height", 0.85f);
+            loaded.grass_width = terr.value("grass_width", 0.22f);
+            loaded.grass_max_distance = terr.value("grass_max_distance", 95.0f);
+            loaded.grass_fade_range = terr.value("grass_fade_range", 25.0f);
+            loaded.grass_wind_speed = terr.value("grass_wind_speed", 1.8f);
+            loaded.grass_wind_strength = terr.value("grass_wind_strength", 0.35f);
             if (terr.contains("heights")) {
                 if (loaded.terrain_grid_size < 32 || loaded.terrain_grid_size > 512 ||
                     !terr["heights"].is_array() || terr["heights"].size() != static_cast<size_t>(loaded.terrain_grid_size) * loaded.terrain_grid_size)
@@ -720,6 +736,11 @@ function gm3d_load_scene_json(_scene_json_path, _asset_base_dir = "") {
             _terrain_inst.flags = GM3D_FLAG_ACTIVE | GM3D_FLAG_CAST_SHADOW;
             _terrain_inst.physics_body_id = _terrain_body;
             array_push(_result.entities, _terrain_inst);
+            if (variable_struct_exists(_terr, "grass_enabled") && _terr.grass_enabled) {
+                grass_set_enabled(1.0);
+                var _gdens = variable_struct_exists(_terr, "grass_density") ? _terr.grass_density : 1.0;
+                grass_rebuild(_gdens, _terr.seed);
+            }
         }
     }
 

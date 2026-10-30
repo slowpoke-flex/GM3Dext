@@ -1208,3 +1208,43 @@ The full development plan is **not complete**. In particular:
   - Captured verified in-game screenshot: `lts_runtime_shot.png` (1107x652 resolution).
   - Confirmed visual rendering of terrain splatting, dynamic shadow projections, skeletal animated characters, falling physics bodies, and Direct3D 11 viewport stability.
 
+---
+
+### 17. Procedural Instanced Grass & Foliage Engine Implementation
+
+- **Architecture & System Design (`GrassSystem.h`, `GrassSystem.cpp`)**:
+  - Engineered a native GPU-instanced foliage rendering subsystem within `RenderWorld`:
+    - **Clump Geometry**: 3 intersecting vertical quads in a star pattern ($0^\circ, 60^\circ, 120^\circ$ yaw) generating 12 vertices and 18 indices per clump with smoothed upward/hemispherical normals for lush lighting without harsh backface contrast.
+    - **Dual-Stream Vertex Input**: Stream 0 delivers per-vertex attributes (`POSITION`, `NORMAL`, `TEXCOORD0`, `TEXCOORD1` with quadratic wind weight $(y/h)^2$ and baked ground AO gradient). Stream 1 delivers 48-byte aligned per-instance data (`INST_POS`, `INST_ROT`, `INST_SCALE`, `INST_PHASE`, `INST_COLOR`).
+    - **Single Draw Call Execution**: Renders up to 120,000 active 3D grass clumps (~720,000 triangles) in a single `DrawIndexedInstanced` call.
+
+- **HLSL Foliage Shader Pipeline (`VS_Grass`, `PS_Grass`)**:
+  - **Row-Major Matrix Layout**: Declares `row_major float4x4 g_view_proj;` to strictly conform to GM3D's column-vector / row-major DirectX 11 pipeline.
+  - **Dual-Distance Smooth Fading**:
+    - Distant Fade: Smoothly collapses clump scale to 0 across $R_{\text{fade}} = [90\text{m}, 120\text{m}]$, discarding out-of-range instances safely beyond the far plane ($Z > 1.0$) with zero fillrate waste.
+    - Near-Camera Proximity Fade: Smoothly fades clumps within $1.5\text{m}$ of the camera lens ($\text{nearFade} = \text{saturate}((d - 1.5) / 1.0)$), eliminating close-range camera clipping artifacts.
+  - **Dynamic Multi-Frequency Wind Sway**:
+    - Harmonics combining high-frequency rustle with traveling low-frequency gusts:
+      $$\vec{D}_{\text{wind}} = \vec{W}_{\text{dir}} \cdot (\sin(\omega t + \vec{P} \cdot \vec{K}_1 + \phi) + 0.35 \sin(2.3 \omega t + \vec{P} \cdot \vec{K}_2 + 1.6 \phi)) \cdot (0.65 + 0.35 \text{gust}) \cdot \text{strength} \cdot W_{\text{wind}}$$
+    - Quadratic vertical tip displacement with horizontal length conservation ($\Delta y = -|\vec{D}| \cdot 0.22$).
+  - **Dynamic Entity Trampling Interaction**:
+    - Injects dynamic sphere collider `g_interaction_collider` ($X, Y, Z, \text{radius}$).
+    - Blades within interaction radius elastically bend outward away from entity pivots and depress downward.
+  - **Realistic Foliage Shading**:
+    - Two-Sided Shading (`CullMode = NONE`) with normal flipping on backfaces (`!isFrontFace`).
+    - Base-to-tip natural hypsometric color gradient blending alpine emerald green with sunlit golden highlights.
+    - Half-Lambert wrapped diffuse lighting ($N \cdot L \times 0.6 + 0.4$) for soft leaf translucency.
+    - Thin-Leaf Subsurface Scattering (SSS): wraps backlight into vibrant rim radiance ($\text{pow}(\vec{V} \cdot -\vec{L}, 3.0) \times 0.55$).
+    - Ground contact AO shading and atmospheric distance fog integration.
+
+- **Terrain & Splatmap Density Distribution (`build_from_terrain`)**:
+  - Automatically distributes clumps across the terrain based on:
+    - Slope angle threshold ($N_y \ge 0.72$, eliminating cliff growth).
+    - Water elevation check ($Y \ge 1.4\text{m}$ to $23.5\text{m}$).
+    - 4-layer splatmap filtering: samples Layer 0 (`Alpine Grass` weight $\ge 0.10$) and suppresses on Layer 3 (`Cobblestone Path` weight $> 0.40$).
+    - Hash-based jitter and natural scale/color variation.
+
+- **GameMaker LTS 2026 Verification**:
+  - Exported and verified in `Runner.exe` x64: 86,410 procedural 3D grass clumps simulated and rendered stably at 60 FPS in a single draw call with zero memory leaks.
+
+

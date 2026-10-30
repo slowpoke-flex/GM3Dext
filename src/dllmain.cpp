@@ -575,3 +575,35 @@ GM_EXPORT double GM_CALL material_clear_all() {
         return GMResult::ERR_GENERAL;
     }
 }
+
+GM_EXPORT double GM_CALL grass_set_enabled(double enabled) {
+    try {
+        return EngineContext::instance().grass_set_enabled(enabled);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL grass_set_wind(double dir_x, double dir_z, double speed, double strength) {
+    try {
+        return EngineContext::instance().grass_set_wind(dir_x, dir_z, speed, strength);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL grass_rebuild(double density, double seed) {
+    try {
+        return EngineContext::instance().grass_rebuild(density, seed);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL grass_get_count() {
+    try {
+        return EngineContext::instance().grass_get_count();
+    } catch (...) {
+        return 0.0;
+    }
+}

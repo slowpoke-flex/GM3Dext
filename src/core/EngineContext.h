@@ -86,6 +86,12 @@ public:
     double terrain_get_height(double x, double z);
     double terrain_apply_edit_data(const void* data, double size_bytes);
 
+    // Procedural Grass & Foliage
+    double grass_set_enabled(double enabled);
+    double grass_set_wind(double dir_x, double dir_z, double speed, double strength);
+    double grass_rebuild(double density, double seed);
+    double grass_get_count();
+
     double anim_play(double entity_id, double anim_index, double speed, double loop);
     double anim_stop(double entity_id);
     double anim_set_time(double entity_id, double time);
