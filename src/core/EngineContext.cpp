@@ -642,3 +642,26 @@ double EngineContext::grass_get_count() {
     if (!m_is_initialized || !m_render_world) return 0.0;
     return static_cast<double>(m_render_world->get_grass_system().get_instance_count());
 }
+
+double EngineContext::grass_clear() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    m_render_world->clear_grass();
+    return GMResult::OK;
+}
+
+double EngineContext::grass_load_file(const char* filepath) {
+    if (!filepath) return GMResult::ERR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    bool ok = m_render_world->load_grass_file(filepath);
+    return ok ? GMResult::OK : GMResult::ERR_GENERAL;
+}
+
+double EngineContext::grass_save_file(const char* filepath) {
+    if (!filepath) return GMResult::ERR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    bool ok = m_render_world->save_grass_file(filepath);
+    return ok ? GMResult::OK : GMResult::ERR_GENERAL;
+}

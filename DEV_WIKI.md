@@ -1247,4 +1247,48 @@ The full development plan is **not complete**. In particular:
 - **GameMaker LTS 2026 Verification**:
   - Exported and verified in `Runner.exe` x64: 86,410 procedural 3D grass clumps simulated and rendered stably at 60 FPS in a single draw call with zero memory leaks.
 
+---
+
+### 18. Unity-Style Interactive Foliage Painting (Grass Brush) & Zero-Default Architecture
+
+- **Zero-Default Architecture (Absent by Default)**:
+  - Foliage is strictly absent by default (`grass_enabled = false`, instance count = 0).
+  - Generating, resizing, or sculpting terrain does not automatically spawn uninvited grass across the map.
+  - Clumps only appear when explicitly painted with the Grass Brush or requested via procedural fill.
+
+- **Unity-Style Foliage Painter Tooling (`TerrainBrushMode::Grass`)**:
+  - Integrated directly into the Terrain Editor panel alongside height sculptors and splatmap painters.
+  - **3D Viewport Brush Projector**:
+    - Real-time terrain-conforming ring indicator at cursor raycast intersection.
+    - Vibrant Emerald Green (`IM_COL32(50, 240, 120, 255)`) indicates active painting.
+    - Bright Coral Red (`IM_COL32(255, 80, 60, 255)`) indicates active erasing (holding `Shift` or checking `Erase mode`).
+  - **Brush Dynamics & Poisson Proximity Filtering**:
+    - Spawns clumps uniformly within the circular brush disc with rate-controlled density accumulator (`m_grass_brush_density`).
+    - Enforces a minimum root distance ($0.22\text{m}$) to prevent dense point over-stacking and preserve frame rates.
+    - Evaluates terrain surface normals ($N_y \ge 0.60$) to prevent unnatural sprouting on sheer cliff faces.
+    - Adds natural jittered yaw rotations ($[0, 2\pi)$), scale variation, individual wind phase offsets, and subtle tint noise.
+  - **Interactive Eraser**:
+    - Instantly cleans out all clump roots within the brush radius when dragging with `Shift + LMB` or in Erase mode.
+  - **Terrain Re-Sculpting Synchronization (`snap_to_terrain`)**:
+    - Automatically updates all existing clump root elevations to match new terrain heights whenever the terrain is sculpted.
+  - **Quick Action Controls**:
+    - `Paint Grass Tool`: One-click button to activate foliage brush mode.
+    - `Clear All Grass`: Resets the entire grass collection to 0 instances and frees GPU buffers.
+    - `Fill Terrain (Procedural)`: One-click convenience button to auto-populate the terrain using the splatmap rule-set.
+    - `Snap Grass to Terrain Heights`: Re-grounds all foliage clumps to the current terrain mesh.
+
+- **Serialization & Binary Packaging (`grass.bin`)**:
+  - **Scene JSON**: Serializes painted clump coordinates, dimensions, rotations, and color tints into `terrain.grass_clumps`.
+  - **High-Performance Binary Format (`grass.bin`)**:
+    - 4-byte ASCII Magic: `0x53415247` (`'GRAS'`).
+    - 4-byte Version: `1`.
+    - 4-byte Clump Count: `uint32_t`.
+    - Binary Payload: `N * 48` bytes (`GrassGPUInstance` stream).
+  - **GameMaker LTS Package Exporter**:
+    - Automatically exports `grass.bin` alongside `scene_gm3d.json` and updates `scr_gm3d_load_scene.gml` with fast binary loading (`grass_load_file`).
+  - **Exported DLL C-API**:
+    - `grass_clear()`
+    - `grass_load_file(const char* filepath)`
+    - `grass_save_file(const char* filepath)`
+
 

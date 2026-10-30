@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace GM3D::Studio {
-enum class TerrainBrushMode { Raise, Lower, Smooth, Flatten, Paint };
+enum class TerrainBrushMode { Raise, Lower, Smooth, Flatten, Paint, Grass };
 
 inline bool apply_terrain_brush(std::vector<float>& heights, uint32_t n, float world_size,
                                 float x, float z, float radius, float strength, float dt,

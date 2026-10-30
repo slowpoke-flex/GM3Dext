@@ -193,6 +193,9 @@ private:
     float m_terrain_brush_radius = 8.0f;
     float m_terrain_brush_strength = 4.0f;
     float m_terrain_flatten_height = 0.0f;
+    float m_grass_brush_density = 15.0f;
+    bool m_grass_erase_mode = false;
+    float m_grass_brush_tint[3] = { 0.22f, 0.38f, 0.15f };
     int m_terrain_grid_input = 128;
     int m_terrain_seed_input = 1337;
     float m_terrain_height_input = 32.0f;

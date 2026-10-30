@@ -2325,14 +2325,13 @@ void StudioApp::draw_environment_panel() {
                 HelpTooltip("Use the left mouse button in the viewport to sculpt or paint. Turn this off to select objects.");
                 ImGui::Spacing();
                 ImGui::TextUnformatted("Brush mode");
-                const char* names[] = { "Raise", "Lower", "Smooth", "Flatten", "Paint" };
+                const char* names[] = { "Raise", "Lower", "Smooth", "Flatten", "Paint Layer", "Grass Brush" };
                 const float half_width = std::max(1.0f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
-                for (int i = 0; i < 5; ++i) {
+                for (int i = 0; i < 6; ++i) {
                     if (i % 2) ImGui::SameLine();
                     const bool selected = static_cast<int>(m_terrain_brush_mode) == i;
                     if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.43f, 0.68f, 1));
-                    const float btn_w = (i == 4) ? -1.0f : half_width;
-                    if (ImGui::Button(names[i], ImVec2(btn_w, 32))) {
+                    if (ImGui::Button(names[i], ImVec2(half_width, 32))) {
                         m_terrain_brush_mode = static_cast<TerrainBrushMode>(i);
                         m_terrain_brush_enabled = true;
                     }
@@ -2342,7 +2341,8 @@ void StudioApp::draw_environment_panel() {
                         "Lower terrain under the brush.",
                         "Smooth nearby height differences.",
                         "Move heights toward the height sampled at the start of the stroke.",
-                        "Paint terrain material layers onto the landscape."
+                        "Paint terrain material layers onto the landscape.",
+                        "Paint or erase procedural 3D grass foliage directly on the terrain (Unity style)."
                     };
                     HelpTooltip(help[i]);
                 }
@@ -2355,6 +2355,34 @@ void StudioApp::draw_environment_panel() {
                 ImGui::SetNextItemWidth(-1);
                 ImGui::SliderFloat("##BrushStrength", &m_terrain_brush_strength, 0.1f, 20.0f, "%.1f");
                 HelpTooltip("Controls how quickly the brush changes terrain.");
+
+                if (m_terrain_brush_mode == TerrainBrushMode::Grass) {
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(0.24f, 0.94f, 0.47f, 1.0f), "[Grass Brush Mode Active]");
+                    ImGui::Checkbox("Erase Grass (or hold Shift)", &m_grass_erase_mode);
+                    HelpTooltip("When active (or holding Shift), dragging in the viewport removes grass clumps.");
+
+                    ImGui::TextUnformatted("Clump Density Flow");
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::SliderFloat("##GrassDensityFlow", &m_grass_brush_density, 1.0f, 60.0f, "%.0f clumps/s");
+                    HelpTooltip("Rate at which grass clumps sprout under the brush.");
+
+                    ImGui::TextUnformatted("Grass Tint");
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::ColorEdit3("##GrassTint", m_grass_brush_tint);
+
+                    auto* rw_clumps = EngineContext::instance().get_render_world();
+                    uint32_t live_clumps = rw_clumps ? rw_clumps->get_grass_system().get_instance_count() : 0;
+                    ImGui::TextDisabled("Painted clumps: %u", live_clumps);
+
+                    if (ImGui::Button("Clear All Grass", ImVec2(-1, 26))) {
+                        if (rw_clumps) rw_clumps->clear_grass();
+                        m_scene.grass_clumps.clear();
+                        m_scene.grass_enabled = false;
+                    }
+                    HelpTooltip("Remove all painted grass from the scene.");
+                    ImGui::Spacing();
+                }
                 ImGui::TextWrapped("Drag on the terrain to sculpt or paint. Flatten uses the height at the start of the stroke.");
                 ImGui::BeginDisabled(!m_history.can_undo() || m_terrain_stroke);
                 if (ImGui::Button("Undo   Ctrl+Z", ImVec2(-1, 30))) apply_history(false);
@@ -2494,51 +2522,16 @@ void StudioApp::draw_environment_panel() {
                     }
                     HelpTooltip("Toggle procedural instanced 3D grass across terrain.");
 
-                    if (m_scene.grass_enabled) {
-                        bool rebuild_needed = false;
-                        ImGui::TextUnformatted("Density");
-                        ImGui::SetNextItemWidth(-1);
-                        if (ImGui::SliderFloat("##GrassDensity", &m_scene.grass_density, 0.2f, 2.5f, "%.2fx")) {
-                            rebuild_needed = true;
-                        }
+                    if (ImGui::Button("Paint Grass Tool", ImVec2(-1, 28))) {
+                        m_terrain_brush_mode = TerrainBrushMode::Grass;
+                        m_terrain_brush_enabled = true;
+                    }
+                    HelpTooltip("Activate the Unity-style grass brush to paint clumps directly in the viewport.");
 
-                        ImGui::TextUnformatted("Height");
-                        ImGui::SetNextItemWidth(-1);
-                        if (ImGui::SliderFloat("##GrassHeight", &m_scene.grass_height, 0.3f, 2.0f, "%.2f m")) {
-                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().base_height = m_scene.grass_height;
-                        }
-
-                        ImGui::TextUnformatted("Clump Width");
-                        ImGui::SetNextItemWidth(-1);
-                        if (ImGui::SliderFloat("##GrassWidth", &m_scene.grass_width, 0.1f, 0.6f, "%.2f m")) {
-                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().base_width = m_scene.grass_width;
-                        }
-
-                        ImGui::TextUnformatted("Visibility Distance");
-                        ImGui::SetNextItemWidth(-1);
-                        if (ImGui::SliderFloat("##GrassMaxDist", &m_scene.grass_max_distance, 40.0f, 180.0f, "%.0f m")) {
-                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().max_distance = m_scene.grass_max_distance;
-                        }
-
-                        ImGui::TextUnformatted("Wind Sway Speed");
-                        ImGui::SetNextItemWidth(-1);
-                        if (ImGui::SliderFloat("##GrassWindSpeed", &m_scene.grass_wind_speed, 0.5f, 5.0f, "%.1fx")) {
-                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().wind_speed = m_scene.grass_wind_speed;
-                        }
-
-                        ImGui::TextUnformatted("Wind Strength");
-                        ImGui::SetNextItemWidth(-1);
-                        if (ImGui::SliderFloat("##GrassWindStrength", &m_scene.grass_wind_strength, 0.05f, 1.0f, "%.2f")) {
-                            if (rw_ui) rw_ui->get_grass_system().get_config_mut().wind_strength = m_scene.grass_wind_strength;
-                        }
-
-                        if (ImGui::Button("Rebuild Grass Instances", ImVec2(-1, 28))) {
-                            rebuild_needed = true;
-                        }
-
-                        if (rebuild_needed && rw_ui) {
+                    if (ImGui::Button("Fill Terrain (Procedural)", ImVec2(-1, 28))) {
+                        if (rw_ui) {
                             GM3D::GrassConfig gcfg = rw_ui->get_grass_system().get_config();
-                            gcfg.enabled = m_scene.grass_enabled;
+                            gcfg.enabled = true;
                             gcfg.density = m_scene.grass_density;
                             gcfg.base_height = m_scene.grass_height;
                             gcfg.base_width = m_scene.grass_width;
@@ -2546,7 +2539,73 @@ void StudioApp::draw_environment_panel() {
                             gcfg.wind_speed = m_scene.grass_wind_speed;
                             gcfg.wind_strength = m_scene.grass_wind_strength;
                             rw_ui->get_grass_system().build_from_terrain(rw_ui->get_device(), rw_ui->get_terrain_system(), gcfg);
+                            rw_ui->set_grass_enabled(true);
+                            m_scene.grass_enabled = true;
+
+                            const auto& insts = rw_ui->get_grass_system().get_instances();
+                            m_scene.grass_clumps.resize(insts.size());
+                            for (size_t ci = 0; ci < insts.size(); ++ci) {
+                                m_scene.grass_clumps[ci].x = insts[ci].px;
+                                m_scene.grass_clumps[ci].y = insts[ci].py;
+                                m_scene.grass_clumps[ci].z = insts[ci].pz;
+                                m_scene.grass_clumps[ci].rot = insts[ci].rotation;
+                                m_scene.grass_clumps[ci].sx = insts[ci].scale_x;
+                                m_scene.grass_clumps[ci].sy = insts[ci].scale_y;
+                                m_scene.grass_clumps[ci].r = insts[ci].r;
+                                m_scene.grass_clumps[ci].g = insts[ci].g;
+                                m_scene.grass_clumps[ci].b = insts[ci].b;
+                            }
                         }
+                    }
+                    HelpTooltip("Auto-populate whole terrain using procedural splatmap distribution.");
+
+                    if (ImGui::Button("Clear All Grass", ImVec2(-1, 26))) {
+                        if (rw_ui) rw_ui->clear_grass();
+                        m_scene.grass_clumps.clear();
+                        m_scene.grass_enabled = false;
+                    }
+                    HelpTooltip("Remove all grass instances from the scene.");
+
+                    if (ImGui::Button("Snap Grass to Terrain Heights", ImVec2(-1, 26))) {
+                        if (rw_ui) {
+                            rw_ui->get_grass_system().snap_to_terrain(rw_ui->get_terrain_system(), rw_ui->get_device());
+                            const auto& insts = rw_ui->get_grass_system().get_instances();
+                            for (size_t ci = 0; ci < insts.size() && ci < m_scene.grass_clumps.size(); ++ci) {
+                                m_scene.grass_clumps[ci].y = insts[ci].py;
+                            }
+                        }
+                    }
+                    HelpTooltip("Re-clamp all grass roots to current terrain elevation.");
+
+                    ImGui::Spacing();
+                    ImGui::TextUnformatted("Height");
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::SliderFloat("##GrassHeight", &m_scene.grass_height, 0.3f, 2.0f, "%.2f m")) {
+                        if (rw_ui) rw_ui->get_grass_system().get_config_mut().base_height = m_scene.grass_height;
+                    }
+
+                    ImGui::TextUnformatted("Clump Width");
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::SliderFloat("##GrassWidth", &m_scene.grass_width, 0.1f, 0.6f, "%.2f m")) {
+                        if (rw_ui) rw_ui->get_grass_system().get_config_mut().base_width = m_scene.grass_width;
+                    }
+
+                    ImGui::TextUnformatted("Visibility Distance");
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::SliderFloat("##GrassMaxDist", &m_scene.grass_max_distance, 40.0f, 180.0f, "%.0f m")) {
+                        if (rw_ui) rw_ui->get_grass_system().get_config_mut().max_distance = m_scene.grass_max_distance;
+                    }
+
+                    ImGui::TextUnformatted("Wind Sway Speed");
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::SliderFloat("##GrassWindSpeed", &m_scene.grass_wind_speed, 0.5f, 5.0f, "%.1fx")) {
+                        if (rw_ui) rw_ui->get_grass_system().get_config_mut().wind_speed = m_scene.grass_wind_speed;
+                    }
+
+                    ImGui::TextUnformatted("Wind Strength");
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::SliderFloat("##GrassWindStrength", &m_scene.grass_wind_strength, 0.05f, 1.0f, "%.2f")) {
+                        if (rw_ui) rw_ui->get_grass_system().get_config_mut().wind_strength = m_scene.grass_wind_strength;
                     }
                 }
                 ImGui::EndDisabled();
@@ -2808,8 +2867,9 @@ void StudioApp::update_terrain_brush(float min_x, float min_y, float width, floa
     }
     if (m_terrain_stroke && (!active || !ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
         refresh_terrain_albedo();
-        if (m_terrain_brush_mode != TerrainBrushMode::Paint) {
+        if (m_terrain_brush_mode != TerrainBrushMode::Paint && m_terrain_brush_mode != TerrainBrushMode::Grass) {
             terrain.update_collider(*pw);
+            rw->get_grass_system().snap_to_terrain(terrain, rw->get_device());
         }
         m_terrain_stroke = false;
         m_terrain_has_previous_hit = false;
@@ -2867,6 +2927,9 @@ void StudioApp::update_terrain_brush(float min_x, float min_y, float width, floa
     ImU32 ring_col = IM_COL32(255, 210, 60, 255);
     if (m_terrain_brush_mode == TerrainBrushMode::Paint) {
         ring_col = (m_terrain_paint_layer < 0) ? IM_COL32(255, 130, 80, 255) : IM_COL32(80, 235, 165, 255);
+    } else if (m_terrain_brush_mode == TerrainBrushMode::Grass) {
+        const bool is_erasing = ImGui::IsKeyDown(ImGuiKey_LeftShift) || m_grass_erase_mode;
+        ring_col = is_erasing ? IM_COL32(255, 80, 60, 255) : IM_COL32(50, 240, 120, 255);
     }
     ImVec2 last; bool have_last = false;
     for (int i = 0; i <= 64; ++i) {
@@ -2894,7 +2957,33 @@ void StudioApp::update_terrain_brush(float min_x, float min_y, float width, floa
         const float right = std::max(from_x, hit_x) + m_terrain_brush_radius;
         const float bottom = std::max(from_z, hit_z) + m_terrain_brush_radius;
 
-        if (m_terrain_brush_mode == TerrainBrushMode::Paint) {
+        if (m_terrain_brush_mode == TerrainBrushMode::Grass) {
+            const bool is_erasing = ImGui::IsKeyDown(ImGuiKey_LeftShift) || m_grass_erase_mode;
+            if (is_erasing) {
+                rw->get_grass_system().erase_brush(hit_x, hit_z, m_terrain_brush_radius, rw->get_device());
+            } else {
+                rw->get_grass_system().paint_brush(hit_x, hit_z, m_terrain_brush_radius, m_grass_brush_density,
+                                                   std::min(m_delta_time, 0.05f), terrain,
+                                                   m_scene.grass_width, m_scene.grass_height,
+                                                   m_grass_brush_tint, rw->get_device());
+                m_scene.grass_enabled = true;
+                rw->set_grass_enabled(true);
+            }
+            const auto& insts = rw->get_grass_system().get_instances();
+            m_scene.grass_clumps.resize(insts.size());
+            for (size_t ci = 0; ci < insts.size(); ++ci) {
+                m_scene.grass_clumps[ci].x = insts[ci].px;
+                m_scene.grass_clumps[ci].y = insts[ci].py;
+                m_scene.grass_clumps[ci].z = insts[ci].pz;
+                m_scene.grass_clumps[ci].rot = insts[ci].rotation;
+                m_scene.grass_clumps[ci].sx = insts[ci].scale_x;
+                m_scene.grass_clumps[ci].sy = insts[ci].scale_y;
+                m_scene.grass_clumps[ci].r = insts[ci].r;
+                m_scene.grass_clumps[ci].g = insts[ci].g;
+                m_scene.grass_clumps[ci].b = insts[ci].b;
+            }
+            m_scene.grass_enabled = !m_scene.grass_clumps.empty();
+        } else if (m_terrain_brush_mode == TerrainBrushMode::Paint) {
             sync_terrain_layers();
             if (apply_terrain_paint_segment(terrain.splatmap_mut(), cfg.grid_size, cfg.world_size, from_x, from_z, hit_x, hit_z,
                                             m_terrain_brush_radius, m_terrain_brush_strength,
@@ -3446,7 +3535,26 @@ void StudioApp::rebuild_terrain() {
         gcfg.wind_strength = m_scene.grass_wind_strength;
         gcfg.wind_dir[0] = m_scene.grass_wind_dir[0];
         gcfg.wind_dir[1] = m_scene.grass_wind_dir[1];
-        rw->get_grass_system().build_from_terrain(rw->get_device(), rw->get_terrain_system(), gcfg);
+        rw->get_grass_system().set_config(gcfg);
+
+        if (m_scene.grass_enabled && !m_scene.grass_clumps.empty()) {
+            std::vector<GM3D::GrassGPUInstance> insts(m_scene.grass_clumps.size());
+            for (size_t ci = 0; ci < m_scene.grass_clumps.size(); ++ci) {
+                const auto& c = m_scene.grass_clumps[ci];
+                insts[ci].px = c.x; insts[ci].py = c.y; insts[ci].pz = c.z;
+                insts[ci].rotation = c.rot;
+                insts[ci].scale_x = c.sx; insts[ci].scale_y = c.sy;
+                insts[ci].wind_phase = (c.x * 0.13f + c.z * 0.17f);
+                insts[ci].r = c.r; insts[ci].g = c.g; insts[ci].b = c.b;
+                insts[ci].pad[0] = 0.0f; insts[ci].pad[1] = 0.0f;
+            }
+            rw->get_grass_system().set_instances(insts, rw->get_device());
+            rw->get_grass_system().snap_to_terrain(rw->get_terrain_system(), rw->get_device());
+            rw->set_grass_enabled(true);
+        } else {
+            rw->get_grass_system().clear();
+            rw->set_grass_enabled(false);
+        }
     } else {
         rw->get_terrain_system().clear(*pw);
         rw->get_grass_system().shutdown();

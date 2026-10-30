@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <random>
 #include <iostream>
+#include <fstream>
 
 namespace GM3D {
 
@@ -477,10 +478,156 @@ void GrassSystem::build_from_terrain(ID3D11Device* device, const TerrainSystem& 
     }
 }
 
+void GrassSystem::clear() {
+    m_instances.clear();
+    m_instance_count = 0;
+    m_instance_buffer.Reset();
+}
+
+void GrassSystem::set_instances(const std::vector<GrassGPUInstance>& instances, ID3D11Device* device) {
+    m_instances = instances;
+    m_instance_count = static_cast<uint32_t>(m_instances.size());
+    if (device) {
+        update_instance_buffer(device);
+    }
+}
+
+uint32_t GrassSystem::paint_brush(float hit_x, float hit_z, float radius, float density, float dt,
+                                  const TerrainSystem& terrain, float base_w, float base_h,
+                                  const float tint[3], ID3D11Device* device) {
+    if (!terrain.is_generated() || radius <= 0.0f || density <= 0.0f) return 0;
+    if (m_instances.size() >= 120000) return 0;
+
+    m_brush_accum += density * 30.0f * std::clamp(dt, 0.001f, 0.05f);
+    int to_spawn = static_cast<int>(m_brush_accum);
+    if (to_spawn <= 0) return 0;
+    m_brush_accum -= static_cast<float>(to_spawn);
+
+    const float world_size = terrain.get_config().world_size;
+    const float half_world = world_size * 0.49f;
+    const float min_dist_sq = 0.22f * 0.22f;
+
+    uint32_t added = 0;
+    for (int i = 0; i < to_spawn && m_instances.size() < 120000; ++i) {
+        float r = radius * std::sqrt(hash01(i, static_cast<int>(m_instances.size()), 777u + m_brush_seed++));
+        float theta = hash01(i, static_cast<int>(m_instances.size()), 999u + m_brush_seed++) * 6.2831853f;
+        float x = hit_x + r * std::cos(theta);
+        float z = hit_z + r * std::sin(theta);
+
+        if (std::abs(x) > half_world || std::abs(z) > half_world) continue;
+
+        float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+        terrain.get_normal(x, z, nx, ny, nz);
+        if (ny < 0.60f) continue;
+
+        bool too_close = false;
+        for (const auto& existing : m_instances) {
+            float edx = existing.px - x;
+            float edz = existing.pz - z;
+            if (edx * edx + edz * edz < min_dist_sq) {
+                too_close = true;
+                break;
+            }
+        }
+        if (too_close) continue;
+
+        float y = terrain.get_height(x, z);
+
+        GrassGPUInstance inst{};
+        inst.px = x;
+        inst.py = y;
+        inst.pz = z;
+        inst.rotation = hash01(static_cast<int>(x * 10), static_cast<int>(z * 10), 123u) * 6.2831853f;
+        float s_var = 0.85f + 0.30f * hash01(static_cast<int>(x * 10), static_cast<int>(z * 10), 456u);
+        inst.scale_x = base_w * s_var;
+        inst.scale_y = base_h * s_var;
+        inst.wind_phase = hash01(static_cast<int>(x * 10), static_cast<int>(z * 10), 789u) * 6.2831853f;
+
+        float c_var = 0.85f + 0.30f * hash01(static_cast<int>(x * 10), static_cast<int>(z * 10), 321u);
+        inst.r = std::clamp(tint[0] * c_var, 0.05f, 1.0f);
+        inst.g = std::clamp(tint[1] * c_var, 0.05f, 1.0f);
+        inst.b = std::clamp(tint[2] * c_var, 0.05f, 1.0f);
+        inst.pad[0] = 0.0f;
+        inst.pad[1] = 0.0f;
+
+        m_instances.push_back(inst);
+        ++added;
+    }
+
+    if (added > 0) {
+        m_instance_count = static_cast<uint32_t>(m_instances.size());
+        m_config.enabled = true;
+        if (device) update_instance_buffer(device);
+    }
+    return added;
+}
+
+uint32_t GrassSystem::erase_brush(float hit_x, float hit_z, float radius, ID3D11Device* device) {
+    if (m_instances.empty() || radius <= 0.0f) return 0;
+    const float r2 = radius * radius;
+    const size_t prev_size = m_instances.size();
+
+    auto it = std::remove_if(m_instances.begin(), m_instances.end(), [&](const GrassGPUInstance& inst) {
+        float dx = inst.px - hit_x;
+        float dz = inst.pz - hit_z;
+        return (dx * dx + dz * dz) <= r2;
+    });
+
+    if (it != m_instances.end()) {
+        m_instances.erase(it, m_instances.end());
+        m_instance_count = static_cast<uint32_t>(m_instances.size());
+        if (device) update_instance_buffer(device);
+        return static_cast<uint32_t>(prev_size - m_instances.size());
+    }
+    return 0;
+}
+
+void GrassSystem::snap_to_terrain(const TerrainSystem& terrain, ID3D11Device* device) {
+    if (!terrain.is_generated() || m_instances.empty()) return;
+    for (auto& inst : m_instances) {
+        inst.py = terrain.get_height(inst.px, inst.pz);
+    }
+    if (device) update_instance_buffer(device);
+}
+
+bool GrassSystem::save_to_file(const std::string& filepath) const {
+    std::ofstream out(filepath, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    uint32_t magic = 0x53415247; // 'GRAS'
+    uint32_t version = 1;
+    uint32_t count = static_cast<uint32_t>(m_instances.size());
+    out.write(reinterpret_cast<const char*>(&magic), 4);
+    out.write(reinterpret_cast<const char*>(&version), 4);
+    out.write(reinterpret_cast<const char*>(&count), 4);
+    if (count > 0) {
+        out.write(reinterpret_cast<const char*>(m_instances.data()), count * sizeof(GrassGPUInstance));
+    }
+    return out.good();
+}
+
+bool GrassSystem::load_from_file(const std::string& filepath, ID3D11Device* device) {
+    std::ifstream in(filepath, std::ios::binary);
+    if (!in) return false;
+    uint32_t magic = 0, version = 0, count = 0;
+    in.read(reinterpret_cast<char*>(&magic), 4);
+    in.read(reinterpret_cast<char*>(&version), 4);
+    in.read(reinterpret_cast<char*>(&count), 4);
+    if (magic != 0x53415247 || version != 1) return false;
+    m_instances.resize(count);
+    if (count > 0) {
+        in.read(reinterpret_cast<char*>(m_instances.data()), count * sizeof(GrassGPUInstance));
+    }
+    m_instance_count = static_cast<uint32_t>(m_instances.size());
+    m_config.enabled = (m_instance_count > 0);
+    if (device) update_instance_buffer(device);
+    return true;
+}
+
 bool GrassSystem::update_instance_buffer(ID3D11Device* device) {
-    if (!device || m_instances.empty()) return false;
+    if (!device) return false;
 
     m_instance_buffer.Reset();
+    if (m_instances.empty()) return true;
 
     D3D11_BUFFER_DESC ibd{};
     ibd.Usage = D3D11_USAGE_DEFAULT;

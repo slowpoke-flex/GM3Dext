@@ -115,6 +115,16 @@ bool SceneSerializer::save_to_file(const Scene& scene, const std::string& filepa
             {"grass_wind_strength", scene.grass_wind_strength}
         };
 
+        if (!scene.grass_clumps.empty()) {
+            json clumps_array = json::array();
+            for (const auto& c : scene.grass_clumps) {
+                clumps_array.push_back({
+                    c.x, c.y, c.z, c.rot, c.sx, c.sy, c.r, c.g, c.b
+                });
+            }
+            j["terrain"]["grass_clumps"] = clumps_array;
+        }
+
         if (!scene.terrain_heights.empty()) j["terrain"]["heights"] = scene.terrain_heights;
 
         if (!scene.terrain_layers.empty()) {
@@ -312,7 +322,7 @@ bool SceneSerializer::load_from_file(Scene& scene, const std::string& filepath) 
             loaded.terrain_world_size = terr.value("world_size", 240.0f);
             loaded.terrain_height_scale = terr.value("height_scale", 32.0f);
             loaded.terrain_seed = terr.value("seed", 1337u);
-            loaded.grass_enabled = terr.value("grass_enabled", true);
+            loaded.grass_enabled = terr.value("grass_enabled", false);
             loaded.grass_density = terr.value("grass_density", 1.0f);
             loaded.grass_height = terr.value("grass_height", 0.85f);
             loaded.grass_width = terr.value("grass_width", 0.22f);
@@ -320,6 +330,24 @@ bool SceneSerializer::load_from_file(Scene& scene, const std::string& filepath) 
             loaded.grass_fade_range = terr.value("grass_fade_range", 25.0f);
             loaded.grass_wind_speed = terr.value("grass_wind_speed", 1.8f);
             loaded.grass_wind_strength = terr.value("grass_wind_strength", 0.35f);
+            loaded.grass_clumps.clear();
+            if (terr.contains("grass_clumps") && terr["grass_clumps"].is_array()) {
+                for (const auto& item : terr["grass_clumps"]) {
+                    if (item.is_array() && item.size() >= 9) {
+                        SceneGrassClump c;
+                        c.x = item[0].get<float>();
+                        c.y = item[1].get<float>();
+                        c.z = item[2].get<float>();
+                        c.rot = item[3].get<float>();
+                        c.sx = item[4].get<float>();
+                        c.sy = item[5].get<float>();
+                        c.r = item[6].get<float>();
+                        c.g = item[7].get<float>();
+                        c.b = item[8].get<float>();
+                        loaded.grass_clumps.push_back(c);
+                    }
+                }
+            }
             if (terr.contains("heights")) {
                 if (loaded.terrain_grid_size < 32 || loaded.terrain_grid_size > 512 ||
                     !terr["heights"].is_array() || terr["heights"].size() != static_cast<size_t>(loaded.terrain_grid_size) * loaded.terrain_grid_size)
@@ -607,6 +635,29 @@ bool SceneSerializer::export_for_gamemaker(const Scene& scene, const std::string
             }
         }
 
+        if (exported.grass_enabled && !exported.grass_clumps.empty()) {
+            const auto grass_bin_path = root / "grass.bin";
+            std::ofstream grass_out(grass_bin_path, std::ios::binary | std::ios::trunc);
+            if (grass_out) {
+                uint32_t magic = 0x53415247; // 'GRAS'
+                uint32_t version = 1;
+                uint32_t count = static_cast<uint32_t>(exported.grass_clumps.size());
+                grass_out.write(reinterpret_cast<const char*>(&magic), 4);
+                grass_out.write(reinterpret_cast<const char*>(&version), 4);
+                grass_out.write(reinterpret_cast<const char*>(&count), 4);
+                for (const auto& c : exported.grass_clumps) {
+                    SceneGrassBinaryInstance inst{};
+                    inst.px = c.x; inst.py = c.y; inst.pz = c.z;
+                    inst.rotation = c.rot;
+                    inst.scale_x = c.sx; inst.scale_y = c.sy;
+                    inst.wind_phase = (c.x * 0.13f + c.z * 0.17f);
+                    inst.r = c.r; inst.g = c.g; inst.b = c.b;
+                    inst.pad[0] = 0.0f; inst.pad[1] = 0.0f;
+                    grass_out.write(reinterpret_cast<const char*>(&inst), sizeof(inst));
+                }
+            }
+        }
+
         const auto gml_script_path = root / "scr_gm3d_load_scene.gml";
         std::ofstream gml(gml_script_path, std::ios::binary | std::ios::trunc);
         if (!gml) {
@@ -738,8 +789,16 @@ function gm3d_load_scene_json(_scene_json_path, _asset_base_dir = "") {
             array_push(_result.entities, _terrain_inst);
             if (variable_struct_exists(_terr, "grass_enabled") && _terr.grass_enabled) {
                 grass_set_enabled(1.0);
-                var _gdens = variable_struct_exists(_terr, "grass_density") ? _terr.grass_density : 1.0;
-                grass_rebuild(_gdens, _terr.seed);
+                var _wspd = variable_struct_exists(_terr, "grass_wind_speed") ? _terr.grass_wind_speed : 1.8;
+                var _wstr = variable_struct_exists(_terr, "grass_wind_strength") ? _terr.grass_wind_strength : 0.35;
+                grass_set_wind(0.707, 0.707, _wspd, _wstr);
+                var _grass_bin = _asset_base_dir + "grass.bin";
+                if (file_exists(_grass_bin)) {
+                    grass_load_file(_grass_bin);
+                }
+            } else {
+                grass_set_enabled(0.0);
+                grass_clear();
             }
         }
     }
