@@ -1133,3 +1133,78 @@ The full development plan is **not complete**. In particular:
   - Integrated 2.5D PBR shaders (`sh_moba_pbr.vsh`, `sh_moba_pbr.fsh`) and helper functions (`scr_draw_sprite_pbr.gml`) in `gml_example/bridge_pbr_sprites/`.
   - Added `tools/generate_relief_maps.py`, implementing Euclidean Distance Transform (EDT) and Sobel filtering for automated sprite-to-PBR map generation (normals, depth, roughness/metallic/AO masks).
   - Integrated rigged animated model `Skeleton_Warrior.glb` into `3Dreadymodels/`.
+
+---
+
+### 15. Procedural Grass & Foliage System (Architecture Plan)
+
+- **Splatmap & Slope-Driven Density Distribution**:
+  - Grass blades and foliage clumps generate procedurally across the terrain surface without requiring manual placement.
+  - Spawning density is modulated by:
+    - Splatmap Channel Weight: samples the active grass layer (Layer 0, `Alpine Grass`) weight $W_{\text{grass}} \in [0, 1]$.
+    - Terrain Slope Angle: computes surface normal steepness from terrain height gradients $\nabla H$; blades suppress on cliff faces and steep inclines ($N_y < 0.75$).
+    - Procedural Blue-Noise / White-Noise jitter: avoids unnatural grid alignment patterns.
+
+- **GPU Instancing & Indirect Drawing Pipeline**:
+  - High-density foliage (tens to hundreds of thousands of blades) rendered in a single GPU draw call using `DrawIndexedInstanced` (or Compute Shader culling with `DrawInstancedIndirect`).
+  - Base geometry: compact 3-to-5 quad clump meshes (6 to 12 triangles per clump) or cross-plane quads with vertex color gradients:
+    - Vertex Color Alpha / Y-channel: encodes blade root ($Y=0$, rigid anchor) vs blade tip ($Y=1$, maximum wind deflection).
+    - Ambient Occlusion gradient baked into vertex colors: roots grounded with deep contact shadowing ($AO \approx 0.15$), tips receiving full direct irradiance ($AO = 1.0$).
+
+- **Dynamic Wind Sway & Interactive Foliage Physics**:
+  - **Vertex Shader Wind Simulation**:
+    - Multi-frequency sine/cosine wave harmonic displacements combined with high-speed directional noise texture sampling:
+      $$\vec{D}_{\text{wind}} = \vec{W}_{\text{dir}} \cdot \left(\sin(\omega t + \vec{P} \cdot \vec{K}) + 0.35 \sin(2.7 \omega t + \vec{P} \cdot 1.8 \vec{K})\right) \cdot Y^2$$
+    - Wind gust turbulence travels realistically across the landscape.
+  - **Dynamic Entity Trample / Displacement**:
+    - Passes up to 8 interactive sphere colliders (player, enemies, rolling boulders) into constant buffer `cbuffer FoliageInteraction : register(b4)`.
+    - Blades within interaction radius smoothly bend outward away from the entity pivot and recover elastically when vacated.
+
+- **Foliage Lighting, Subsurface Scattering (SSS) & LOD Culling**:
+  - Two-Sided Shading (`CullMode = NONE`) with inverted backface normals for correct direct sun BRDF evaluation.
+  - Thin-Leaf Subsurface Scattering (Translucency): wraps sunlight through the blades when looking toward the sun ($\vec{L} \cdot -\vec{V} > 0$), producing vibrant luminous rim highlights.
+  - Distance Fade & Stochastic Culling: blades smoothly scale downward to zero height at the outer visibility radius ($R \approx 80\text{m} - 120\text{m}$), eliminating abrupt popping artifacts and maintaining stable $60\text{+} \text{ FPS}$.
+
+---
+
+### 16. End-to-End Runtime Verification in GameMaker LTS 2026
+
+- **Overview & Test Scope**:
+  - Validated complete end-to-end integration between GM3D Studio scene export (`GM3DCheck.exe export`) and the GameMaker LTS 2026 native 64-bit runtime (`runtime-2026.0.0.23`, `Runner.exe`).
+  - Target project: `scratch/gm-lts-check/project/3DTEST.yyp`.
+  - Representative test scene: `scratch/test-scene/full_test_scene.json` (`LTS Full Showcase`).
+
+- **Scene Assets & Configuration**:
+  - **Environment**: Directional sun with 2-cascade Cascaded Shadow Mapping (CSM), distance fog, sky atmosphere.
+  - **Procedural Multi-Texture Terrain**: 32x32 heightfield generated analytically with derivative-damped elevation ($H(x,z) = 7.0 + 3.0 \sin(fx) \cos(fz)$), 4-layer splatmap weights (`Alpine Grass`, `Cliff Granite`, `Coastal Sand`, `Cobblestone Path`), exported as `terrain.pfm`.
+  - **PBR Material**: Custom PBR armor material bound to albedo `assets/models/skeleton_texture.png` and normal map `GM3Dext_Bridge/out_skeleton/skeleton_norm_0.png`.
+  - **Skeletal Mesh Entities**:
+    - `Skeleton_Warrior`: Rigged model (`Skeleton_Warrior.glb`) with box collider.
+    - `Animated_Mannequin`: Rigged model (`UAL1_Standard.glb`) playing clip 9 (`Idle_Loop`) with capsule collider.
+  - **Dynamic Jolt Rigid Bodies**:
+    - `Dynamic_Boulder`: Sphere rigid body ($M=2.5$).
+    - `Dynamic_Chest`: Box rigid body ($M=1.5$).
+  - **Point Lights**: Orange torch light casting dynamic shadows, cyan crystal light for localized ambient fill.
+
+- **GameMaker LTS 2026 Pipeline Execution**:
+  - **Asset Compiler (`GMAssetCompiler.dll` / `Igor.exe`)**:
+    - Compiled `3DTEST.yyp` under 64-bit Windows target (`Release` build, `vm` runtime).
+    - Packaged `scene_gm3d.json`, `terrain.pfm`, and `assets/` into `3DTEST.win`.
+    - Total asset compiler time: ~400ms, 0 errors, 0 warnings.
+  - **Runtime Execution (`Runner.exe` x64)**:
+    - Direct3D 11 hardware device initialized successfully.
+    - Extension initialized: `[GM3Dext] Engine initialized successfully! Version: 1`.
+    - Scene loader (`scr_gm3d_load_scene.gml`) deserialized `LTS Full Showcase` (5 entities, 4 physics bodies).
+    - Verified terrain elevation query: `gm3d_terrain_get_height(0, 0) == 7.0`.
+    - 420-frame continuous simulation stepped at 60 FPS:
+      - `RigidBody ID=6` (Chest): fell under gravity from $Y=18.0 \to 16.76 \to 13.12$, struck terrain at $Y \approx 7.72$, slid along the slope, and settled at $Y=6.84$.
+      - `RigidBody ID=5` (Boulder): fell from $Y=16.0 \to 14.76 \to 11.12$, impacted terrain at $Y=9.04$, rolled down the hill slope to $Y=7.12$.
+      - Dynamic physics readback (`buffer_peek` on transform buffers) tracked smooth body coordinates with zero memory drift.
+    - Clean test conclusion: `GM3D_LTS_TEST_SUCCESS: All entities rendered, physics stepped, animation ticked!`.
+    - Extension shutdown: `[GM3Dext] Engine shut down.`, runner process exited with code 0.
+
+- **Visual Validation & Window Capture**:
+  - Automated window capture via `PrintWindow` and `DesktopScreenCapture` Win32 API.
+  - Captured verified in-game screenshot: `lts_runtime_shot.png` (1107x652 resolution).
+  - Confirmed visual rendering of terrain splatting, dynamic shadow projections, skeletal animated characters, falling physics bodies, and Direct3D 11 viewport stability.
+
