@@ -88,6 +88,7 @@ private:
     void unparent_selected_entities();
     void align_selected_entities(int axis, int mode); // axis: 0=X, 1=Y, 2=Z; mode: 0=Min, 1=Center, 2=Max, 3=Distribute
     void snap_selected_to_surface();
+    void focus_selected();
     void auto_relink_missing_assets();
 
     // Physics Simulation Mode in Editor
@@ -217,6 +218,8 @@ private:
     float m_cam_speed = 18.0f;
     float m_cam_target[3] = { 0.0f, 1.4f, 0.0f };
     float m_cam_orbit_dist = 22.0f;
+    float m_cam_velocity[3] = { 0.0f, 0.0f, 0.0f };
+    float m_cam_zoom_velocity = 0.0f;
 
     // Window Panels Visibility
     bool m_show_viewport = true;
@@ -224,7 +227,7 @@ private:
     bool m_show_inspector = true;
     bool m_show_environment = true;
     bool m_show_status_bar = true;
-    bool m_show_materials = true;
+    bool m_show_materials = false;
     uint32_t m_selected_material_id = 0;
     std::string m_material_diag_title;
     std::string m_material_diag_report;

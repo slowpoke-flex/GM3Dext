@@ -6,6 +6,9 @@
 
 #ifdef _WIN32
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    // Enable Per-Monitor V2 DPI awareness for crystal-clear text and proper window sizing
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     // Optional console for debugging output
 #ifdef _DEBUG
     AllocConsole();
@@ -49,7 +52,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         if (!app.initialize(hInstance, nCmdShow)) {
             std::cerr << "Failed to initialize GM3D Studio.\n";
             MessageBoxW(nullptr, L"Failed to initialize GM3D Studio!", L"Error", MB_ICONERROR);
-        } else result = app.run();
+        } else {
+            result = app.run();
+        }
     }
     if (log) { std::cout << "GM3D Studio exiting with code " << result << "\n"; std::cout.flush(); std::cerr.flush(); }
     std::cout.rdbuf(old_cout);

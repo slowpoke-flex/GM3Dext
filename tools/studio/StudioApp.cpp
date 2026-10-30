@@ -197,13 +197,32 @@ bool StudioApp::initialize(HINSTANCE hInstance, int nCmdShow) {
 
     if (!RegisterClassExW(&wc)) return false;
 
-    // 2. Create Window (1600x900 default)
-    RECT rc = { 0, 0, static_cast<LONG>(m_window_width), static_cast<LONG>(m_window_height) };
+    // 2. Create Window (adjust to desktop work area if screen is <= 1640x940)
+    RECT work_area = { 0, 0, 1600, 900 };
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0);
+    LONG screen_w = work_area.right - work_area.left;
+    LONG screen_h = work_area.bottom - work_area.top;
+
+    int posX = CW_USEDEFAULT;
+    int posY = CW_USEDEFAULT;
+    int target_w = static_cast<int>(m_window_width);
+    int target_h = static_cast<int>(m_window_height);
+
+    if (screen_w <= 1640 || screen_h <= 940) {
+        target_w = static_cast<int>(std::max<LONG>(1024, screen_w - 40));
+        target_h = static_cast<int>(std::max<LONG>(680, screen_h - 60));
+        posX = work_area.left + (screen_w - target_w) / 2;
+        posY = work_area.top + (screen_h - target_h) / 2;
+        m_window_width = static_cast<uint32_t>(target_w);
+        m_window_height = static_cast<uint32_t>(target_h);
+    }
+
+    RECT rc = { 0, 0, target_w, target_h };
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
 
     m_hwnd = CreateWindowExW(
         0, wc.lpszClassName, L"GM3D Studio - 3D World Editor",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+        WS_OVERLAPPEDWINDOW, posX, posY,
         rc.right - rc.left, rc.bottom - rc.top,
         nullptr, nullptr, hInstance, nullptr
     );
@@ -462,24 +481,61 @@ void StudioApp::update_camera(float delta_time) {
 
     }
 
-    if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.WantTextInput && !io.KeyCtrl && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) && m_selected_entity_id >= 0) {
-        for (const auto& e : m_scene.entities) {
-            if (static_cast<int32_t>(e.id) != m_selected_entity_id) continue;
-            float direction[3];
-            if (!viewport_ray(m_cam_pos, m_cam_target, 0.5f, 0.5f, 1.0f, 1.0f, direction)) break;
-            float wpos[3], wrot[3], wscale[3];
-            ComputeWorldTransform(m_scene, e, wpos, wrot, wscale);
-            const float radius = e.is_point_light ? 1.0f : std::max({std::abs(wscale[0]), std::abs(wscale[1]), std::abs(wscale[2]), 0.5f});
-            const float distance = std::max(3.0f, radius * 2.5f);
-            for (int i = 0; i < 3; ++i) {
-                m_cam_target[i] = wpos[i];
-                m_cam_pos[i] = wpos[i] - direction[i] * distance;
-            }
-            m_cam_yaw = std::atan2(direction[0], direction[2]) * 57.2957795f;
-            m_cam_pitch = -std::asin(std::clamp(direction[1], -1.0f, 1.0f)) * 57.2957795f;
-            break;
-        }
+    if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.WantTextInput && !io.KeyCtrl && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        focus_selected();
     }
+}
+
+void StudioApp::focus_selected() {
+    if (m_selected_entity_id < 0 && m_selected_entity_ids.empty()) return;
+
+    float center[3] = { 0.0f, 0.0f, 0.0f };
+    float max_extent = 1.0f;
+    size_t count = 0;
+
+    std::vector<uint32_t> target_ids;
+    if (!m_selected_entity_ids.empty()) {
+        target_ids.assign(m_selected_entity_ids.begin(), m_selected_entity_ids.end());
+    } else if (m_selected_entity_id >= 0) {
+        target_ids.push_back(static_cast<uint32_t>(m_selected_entity_id));
+    }
+
+    for (uint32_t id : target_ids) {
+        Entity* e = m_scene.find_entity(id);
+        if (!e) continue;
+        float wpos[3], wrot[3], wscale[3];
+        ComputeWorldTransform(m_scene, *e, wpos, wrot, wscale);
+        center[0] += wpos[0];
+        center[1] += wpos[1];
+        center[2] += wpos[2];
+        const float radius = e->is_point_light ? 1.0f : std::max({std::abs(wscale[0]), std::abs(wscale[1]), std::abs(wscale[2]), 0.5f});
+        max_extent = std::max(max_extent, radius);
+        ++count;
+    }
+
+    if (count == 0) return;
+    center[0] /= static_cast<float>(count);
+    center[1] /= static_cast<float>(count);
+    center[2] /= static_cast<float>(count);
+
+    float direction[3];
+    if (!viewport_ray(m_cam_pos, m_cam_target, 0.5f, 0.5f, 1.0f, 1.0f, direction)) {
+        float radYaw = m_cam_yaw * 0.0174532925f;
+        float radPitch = m_cam_pitch * 0.0174532925f;
+        direction[0] = cosf(radPitch) * sinf(radYaw);
+        direction[1] = sinf(radPitch);
+        direction[2] = cosf(radPitch) * cosf(radYaw);
+    }
+
+    const float distance = std::max(3.5f, max_extent * 2.8f);
+    for (int i = 0; i < 3; ++i) {
+        m_cam_target[i] = center[i];
+        m_cam_pos[i] = center[i] - direction[i] * distance;
+        m_cam_velocity[i] = 0.0f;
+    }
+    m_cam_zoom_velocity = 0.0f;
+    m_cam_yaw = std::atan2(direction[0], direction[2]) * 57.2957795f;
+    m_cam_pitch = -std::asin(std::clamp(direction[1], -1.0f, 1.0f)) * 57.2957795f;
 }
 
 void StudioApp::sync_scene_to_engine() {
@@ -692,9 +748,18 @@ void StudioApp::render() {
 
     if (!m_simulating) {
         m_history.observe(m_scene, ImGui::IsAnyItemActive() || ImGuizmo::IsUsing() || m_terrain_stroke);
-        const std::wstring title = m_history.dirty(m_scene)
-            ? L"GM3D Studio - 3D World Editor *" : L"GM3D Studio - 3D World Editor";
-        SetWindowTextW(m_hwnd, title.c_str());
+        std::wstring scene_display_name;
+        if (!m_scene.filepath.empty()) {
+            scene_display_name = std::filesystem::u8path(m_scene.filepath).filename().wstring();
+        } else {
+            scene_display_name = L"Untitled Scene";
+        }
+        std::wstring new_title = L"GM3D Studio - [" + scene_display_name + (m_history.dirty(m_scene) ? L" *]" : L"]");
+        static std::wstring s_last_title;
+        if (new_title != s_last_title) {
+            s_last_title = new_title;
+            SetWindowTextW(m_hwnd, new_title.c_str());
+        }
     }
 
     // 4. Sync latest transformed entity data to shared buffer
@@ -743,31 +808,31 @@ void StudioApp::draw_dockspace() {
     ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
 
     // Initial Professional 3D Layout Setup (Blender / Unreal Style)
-    static bool s_first_time = true;
-    bool need_build = s_first_time || m_request_reset_layout;
-    if (need_build) {
-        s_first_time = false;
-        bool force_reset = m_request_reset_layout;
+    // Defer initialization until the main window has received its full work size (>= 400px)
+    static bool s_layout_initialized = false;
+    if (!s_layout_initialized && dockspace_size.x >= 400.0f) {
+        s_layout_initialized = true;
+        m_request_reset_layout = true;
+    }
+
+    if (m_request_reset_layout) {
         m_request_reset_layout = false;
-        ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockspace_id);
-        if (force_reset || node == nullptr || (node->ChildNodes[0] == nullptr && node->ChildNodes[1] == nullptr)) {
-            ImGui::DockBuilderRemoveNode(dockspace_id);
-            ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-            ImGui::DockBuilderSetNodeSize(dockspace_id, dockspace_size);
+        ImGui::DockBuilderRemoveNode(dockspace_id);
+        ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspace_id, dockspace_size);
 
-            ImGuiID dock_main = dockspace_id;
-            ImGuiID dock_right = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.26f, nullptr, &dock_main);
-            ImGuiID dock_right_down = ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Down, 0.55f, nullptr, &dock_right);
-            ImGuiID dock_left = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Left, 0.22f, nullptr, &dock_main);
+        ImGuiID dock_main = dockspace_id;
+        ImGuiID dock_right = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.28f, nullptr, &dock_main);
+        ImGuiID dock_right_down = ImGui::DockBuilderSplitNode(dock_right, ImGuiDir_Down, 0.52f, nullptr, &dock_right);
+        ImGuiID dock_left = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Left, 0.24f, nullptr, &dock_main);
 
-            ImGui::DockBuilderDockWindow("Viewport", dock_main);
-            ImGui::DockBuilderDockWindow("Scene Hierarchy", dock_right);
-            ImGui::DockBuilderDockWindow("Inspector", dock_right_down);
-            ImGui::DockBuilderDockWindow("Materials", dock_right_down);
-            ImGui::DockBuilderDockWindow("Environment & Lighting", dock_left);
+        ImGui::DockBuilderDockWindow("Viewport", dock_main);
+        ImGui::DockBuilderDockWindow("Scene Hierarchy", dock_right);
+        ImGui::DockBuilderDockWindow("Inspector", dock_right_down);
+        ImGui::DockBuilderDockWindow("Materials", dock_right_down);
+        ImGui::DockBuilderDockWindow("Environment & Lighting", dock_left);
 
-            ImGui::DockBuilderFinish(dockspace_id);
-        }
+        ImGui::DockBuilderFinish(dockspace_id);
     }
 
     ImGui::End();
@@ -874,15 +939,15 @@ void StudioApp::draw_viewport_panel() {
     const bool compact_toolbar = ImGui::GetContentRegionAvail().x < 700.0f;
     const float toolbar_height = compact_toolbar ? 2.0f * ImGui::GetFrameHeightWithSpacing() + 12.0f : 43.0f;
     ImGui::BeginChild("ViewportToolbar", ImVec2(0, toolbar_height), false, ImGuiWindowFlags_HorizontalScrollbar);
-    if (m_simulating) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.58f, 0.20f, 0.19f, 1));
-    else ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.42f, 0.29f, 1));
-    if (ImGui::Button(m_simulating ? "Stop" : "Play")) {
+    if (m_simulating) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.22f, 0.20f, 1));
+    else ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.52f, 0.29f, 1));
+    if (ImGui::Button(m_simulating ? "Stop (P)" : "Play (P)", ImVec2(75, 26))) {
         if (m_simulating) stop_simulation(); else start_simulation();
     }
     ImGui::PopStyleColor();
-    HelpTooltip("Start or stop the physics preview. Press P. Stopping restores the scene.");
+    HelpTooltip("Start or stop the physics preview. Shortcut: P. Stopping restores the original scene state.");
     ImGui::SameLine();
-    if (ImGui::Button("+ Add")) ImGui::OpenPopup("ViewportAdd");
+    if (ImGui::Button("+ Add", ImVec2(60, 26))) ImGui::OpenPopup("ViewportAdd");
     HelpTooltip("Add a primitive, point light, or imported model to the scene.");
     if (ImGui::BeginPopup("ViewportAdd")) {
         if (ImGui::MenuItem("Cube")) add_entity(0, "Cube");
@@ -898,7 +963,7 @@ void StudioApp::draw_viewport_panel() {
     }
     auto tool_button = [&](const char* text, bool selected) {
         if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.43f, 0.68f, 1.0f));
-        bool pressed = ImGui::Button(text);
+        bool pressed = ImGui::Button(text, ImVec2(56, 26));
         if (selected) ImGui::PopStyleColor();
         return pressed;
     };
@@ -919,12 +984,30 @@ void StudioApp::draw_viewport_panel() {
     }
     HelpTooltip("Toggle terrain sculpting and open the brush settings.");
     if (!compact_toolbar) ImGui::SameLine();
-    if (ImGui::Button(m_gizmo_mode == GizmoMode::Local ? "Local" : "World"))
+    if (ImGui::Button(m_gizmo_mode == GizmoMode::Local ? "Local" : "World", ImVec2(54, 26)))
         m_gizmo_mode = (m_gizmo_mode == GizmoMode::Local) ? GizmoMode::World : GizmoMode::Local;
     HelpTooltip("Switch gizmo axes between local object space and world space.");
     ImGui::SameLine();
     ImGui::Checkbox("Snap", &m_gizmo_snap);
     HelpTooltip("Snap gizmo transformations to fixed increments.");
+    if (m_gizmo_snap) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(68.0f);
+        const char* snap_steps[] = { "0.1m", "0.25m", "0.5m", "1.0m", "2.0m", "5.0m" };
+        const float snap_vals[] = { 0.1f, 0.25f, 0.5f, 1.0f, 2.0f, 5.0f };
+        int cur_snap_idx = 3;
+        for (int i = 0; i < 6; ++i) {
+            if (fabsf(m_snap_translation[0] - snap_vals[i]) < 0.05f) { cur_snap_idx = i; break; }
+        }
+        if (ImGui::Combo("##SnapStep", &cur_snap_idx, snap_steps, 6)) {
+            m_snap_translation[0] = m_snap_translation[1] = m_snap_translation[2] = snap_vals[cur_snap_idx];
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Focus (F)", ImVec2(72, 26))) {
+        focus_selected();
+    }
+    HelpTooltip("Center and frame the camera on selected objects (Shortcut: F).");
     ImGui::SameLine();
     ImGui::Checkbox("Colliders", &m_show_collider_gizmos);
     HelpTooltip("Display emerald green Jolt physics collider wireframes on selected objects.");
@@ -1099,6 +1182,9 @@ void StudioApp::draw_outliner_entity_node(Entity& e, const std::string& filter, 
         bool shift = ImGui::GetIO().KeyShift;
         select_entity(e.id, ctrl, shift);
     }
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        focus_selected();
+    }
 
     // Drag source: dragging this entity to reparent
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
@@ -1128,6 +1214,8 @@ void StudioApp::draw_outliner_entity_node(Entity& e, const std::string& filter, 
 
     if (ImGui::BeginPopupContextItem()) {
         if (!is_entity_selected(e.id)) select_entity(e.id, false, false);
+        if (ImGui::MenuItem("Focus Camera (F)")) focus_selected();
+        ImGui::Separator();
         if (ImGui::MenuItem("Create Child Group")) {
             Entity group;
             group.id = m_scene.next_entity_id++;
@@ -1163,17 +1251,24 @@ void StudioApp::draw_outliner_panel() {
     ImGui::Spacing();
 
     // Top action bar
-    if (ImGui::Button("+ Add Entity", ImVec2(100, 26))) {
+    const float half_btn_w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+
+    if (ImGui::Button("+ Add Entity", ImVec2(half_btn_w, 28))) {
         ImGui::OpenPopup("AddEntityPopup");
     }
     ImGui::SameLine();
+    if (ImGui::Button("Focus (F)", ImVec2(half_btn_w, 28))) {
+        focus_selected();
+    }
+    HelpTooltip("Frame the 3D camera on selected entities (Shortcut: F).");
+
     ImGui::BeginDisabled(m_selected_entity_ids.empty() && m_selected_entity_id < 0);
-    if (ImGui::Button("Group (Ctrl+G)", ImVec2(105, 26))) {
+    if (ImGui::Button("Group (Ctrl+G)", ImVec2(half_btn_w, 26))) {
         group_selected_entities();
     }
     HelpTooltip("Group all selected objects under a new parent transform.");
     ImGui::SameLine();
-    if (ImGui::Button("Unparent", ImVec2(75, 26))) {
+    if (ImGui::Button("Unparent", ImVec2(half_btn_w, 26))) {
         unparent_selected_entities();
     }
     HelpTooltip("Detach selected objects from their parents back to root level.");
@@ -1919,94 +2014,164 @@ void StudioApp::draw_material_editor_panel() {
 
     ImGui::Separator();
 
-    // Split Layout: Left List, Right Inspector
-    float left_width = 170.0f;
-    ImGui::BeginChild("MaterialListPane", ImVec2(left_width, 0), true);
-    static char filter_buf[64] = "";
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##MatFilter", "Search...", filter_buf, sizeof(filter_buf));
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    const bool compact_mode = (avail_w < 480.0f);
 
-    std::string filter = filter_buf;
-    std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
-
-    for (const auto& mat : m_scene.materials) {
-        std::string lower_name = mat.name;
-        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-        if (!filter.empty() && lower_name.find(filter) == std::string::npos) continue;
-
-        ImGui::PushID(static_cast<int>(mat.id));
-        ImVec4 swatch(mat.base_color[0], mat.base_color[1], mat.base_color[2], mat.base_color[3]);
-        ImGui::ColorButton("##sw", swatch, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, ImVec2(14, 14));
-        ImGui::SameLine();
-
-        bool is_selected = (mat.id == m_selected_material_id);
-        if (ImGui::Selectable(mat.name.c_str(), is_selected)) {
-            m_selected_material_id = mat.id;
+    if (compact_mode) {
+        Material* cur = active_mat;
+        std::string cur_name = cur ? cur->name : "Select Material...";
+        ImGui::TextUnformatted("Active Material");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##MatComboCompact", cur_name.c_str())) {
+            for (const auto& mat : m_scene.materials) {
+                ImGui::PushID(static_cast<int>(mat.id));
+                ImVec4 swatch(mat.base_color[0], mat.base_color[1], mat.base_color[2], mat.base_color[3]);
+                ImGui::ColorButton("##sw", swatch, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, ImVec2(14, 14));
+                ImGui::SameLine();
+                bool is_selected = (mat.id == m_selected_material_id);
+                if (ImGui::Selectable(mat.name.c_str(), is_selected)) {
+                    m_selected_material_id = mat.id;
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
         }
-        ImGui::PopID();
-    }
-    ImGui::EndChild();
+        ImGui::Separator();
+    } else {
+        float left_width = 170.0f;
+        ImGui::BeginChild("MaterialListPane", ImVec2(left_width, 0), true);
+        static char filter_buf[64] = "";
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##MatFilter", "Search...", filter_buf, sizeof(filter_buf));
 
-    ImGui::SameLine();
+        std::string filter = filter_buf;
+        std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
+
+        for (const auto& mat : m_scene.materials) {
+            std::string lower_name = mat.name;
+            std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+            if (!filter.empty() && lower_name.find(filter) == std::string::npos) continue;
+
+            ImGui::PushID(static_cast<int>(mat.id));
+            ImVec4 swatch(mat.base_color[0], mat.base_color[1], mat.base_color[2], mat.base_color[3]);
+            ImGui::ColorButton("##sw", swatch, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, ImVec2(14, 14));
+            ImGui::SameLine();
+
+            bool is_selected = (mat.id == m_selected_material_id);
+            if (ImGui::Selectable(mat.name.c_str(), is_selected)) {
+                m_selected_material_id = mat.id;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        ImGui::SameLine();
+    }
 
     // Right Inspector Pane
     ImGui::BeginChild("MaterialPropertiesPane", ImVec2(0, 0), true);
     if (active_mat) {
         update_material_preview_texture(*active_mat);
 
-        // Header with Name & Preview
-        ImGui::Columns(2, "MatHeaderCols", false);
-        ImGui::SetColumnWidth(0, 140.0f);
-
-        // 3D Preview Image
-        if (m_mat_preview_srv) {
-            ImGui::Image(reinterpret_cast<ImTextureID>(m_mat_preview_srv.Get()), ImVec2(128, 128));
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Cook-Torrance GGX PBR preview with roughness, metallic and Fresnel reflections");
+        if (compact_mode) {
+            if (m_mat_preview_srv) {
+                ImGui::Image(reinterpret_cast<ImTextureID>(m_mat_preview_srv.Get()), ImVec2(80, 80));
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Cook-Torrance GGX PBR preview with roughness, metallic and Fresnel reflections");
+                }
+                ImGui::SameLine();
             }
-        }
-
-        ImGui::NextColumn();
-
-        char name_buf[128];
-        strncpy_s(name_buf, active_mat->name.c_str(), sizeof(name_buf) - 1);
-        ImGui::TextUnformatted("Material Name");
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##MatName", name_buf, sizeof(name_buf))) {
-            active_mat->name = name_buf;
-        }
-
-        ImGui::TextDisabled("ID: %u | Type: %s", active_mat->id,
-            active_mat->is_builtin_preset ? "Builtin Preset" : "Custom PBR");
-
-        if (active_mat->is_builtin_preset) {
-            if (ImGui::Button("Convert to Custom PBR", ImVec2(-1, 24))) {
-                active_mat->is_builtin_preset = false;
+            ImGui::BeginGroup();
+            char name_buf[128];
+            strncpy_s(name_buf, active_mat->name.c_str(), sizeof(name_buf) - 1);
+            ImGui::TextUnformatted("Material Name");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##MatNameCompact", name_buf, sizeof(name_buf))) {
+                active_mat->name = name_buf;
             }
-            HelpTooltip("Convert this built-in preset to an editable custom PBR material.");
-        }
+            ImGui::TextDisabled("ID: %u | %s", active_mat->id,
+                active_mat->is_builtin_preset ? "Builtin" : "Custom PBR");
+            ImGui::EndGroup();
 
-        Entity* sel_e = selected_entity();
-        if (sel_e) {
-            if (ImGui::Button("Assign to Selected Object", ImVec2(-1, 26))) {
-                sel_e->material_id = static_cast<uint16_t>(active_mat->id);
+            if (active_mat->is_builtin_preset) {
+                if (ImGui::Button("Convert to Custom PBR", ImVec2(-1, 24))) {
+                    active_mat->is_builtin_preset = false;
+                }
+                HelpTooltip("Convert this built-in preset to an editable custom PBR material.");
             }
-        }
-        if (m_selected_entity_ids.size() > 1) {
-            char apply_txt[64];
-            snprintf(apply_txt, sizeof(apply_txt), "Assign to All %zu Selected", m_selected_entity_ids.size());
-            if (ImGui::Button(apply_txt, ImVec2(-1, 24))) {
-                for (uint32_t eid : m_selected_entity_ids) {
-                    for (auto& e : m_scene.entities) {
-                        if (e.id == eid) {
-                            e.material_id = static_cast<uint16_t>(active_mat->id);
+            Entity* sel_e = selected_entity();
+            if (sel_e) {
+                if (ImGui::Button("Assign to Selected Object", ImVec2(-1, 26))) {
+                    sel_e->material_id = static_cast<uint16_t>(active_mat->id);
+                }
+            }
+            if (m_selected_entity_ids.size() > 1) {
+                char apply_txt[64];
+                snprintf(apply_txt, sizeof(apply_txt), "Assign to All %zu Selected", m_selected_entity_ids.size());
+                if (ImGui::Button(apply_txt, ImVec2(-1, 24))) {
+                    for (uint32_t eid : m_selected_entity_ids) {
+                        for (auto& e : m_scene.entities) {
+                            if (e.id == eid) {
+                                e.material_id = static_cast<uint16_t>(active_mat->id);
+                            }
                         }
                     }
                 }
             }
-        }
+        } else {
+            // Header with Name & Preview
+            ImGui::Columns(2, "MatHeaderCols", false);
+            ImGui::SetColumnWidth(0, 140.0f);
 
-        ImGui::Columns(1);
+            // 3D Preview Image
+            if (m_mat_preview_srv) {
+                ImGui::Image(reinterpret_cast<ImTextureID>(m_mat_preview_srv.Get()), ImVec2(128, 128));
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Cook-Torrance GGX PBR preview with roughness, metallic and Fresnel reflections");
+                }
+            }
+
+            ImGui::NextColumn();
+
+            char name_buf[128];
+            strncpy_s(name_buf, active_mat->name.c_str(), sizeof(name_buf) - 1);
+            ImGui::TextUnformatted("Material Name");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##MatName", name_buf, sizeof(name_buf))) {
+                active_mat->name = name_buf;
+            }
+
+            ImGui::TextDisabled("ID: %u | Type: %s", active_mat->id,
+                active_mat->is_builtin_preset ? "Builtin Preset" : "Custom PBR");
+
+            if (active_mat->is_builtin_preset) {
+                if (ImGui::Button("Convert to Custom PBR", ImVec2(-1, 24))) {
+                    active_mat->is_builtin_preset = false;
+                }
+                HelpTooltip("Convert this built-in preset to an editable custom PBR material.");
+            }
+
+            Entity* sel_e = selected_entity();
+            if (sel_e) {
+                if (ImGui::Button("Assign to Selected Object", ImVec2(-1, 26))) {
+                    sel_e->material_id = static_cast<uint16_t>(active_mat->id);
+                }
+            }
+            if (m_selected_entity_ids.size() > 1) {
+                char apply_txt[64];
+                snprintf(apply_txt, sizeof(apply_txt), "Assign to All %zu Selected", m_selected_entity_ids.size());
+                if (ImGui::Button(apply_txt, ImVec2(-1, 24))) {
+                    for (uint32_t eid : m_selected_entity_ids) {
+                        for (auto& e : m_scene.entities) {
+                            if (e.id == eid) {
+                                e.material_id = static_cast<uint16_t>(active_mat->id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            ImGui::Columns(1);
+        }
         ImGui::Separator();
 
         // PBR Properties
@@ -3053,6 +3218,17 @@ void StudioApp::stop_simulation() {
         m_cam_yaw = m_sim_backup_cam_yaw;
         m_cam_pitch = m_sim_backup_cam_pitch;
 
+        float radYaw = m_cam_yaw * 0.0174532925f;
+        float radPitch = m_cam_pitch * 0.0174532925f;
+        float fx = cosf(radPitch) * sinf(radYaw);
+        float fy = sinf(radPitch);
+        float fz = cosf(radPitch) * cosf(radYaw);
+        m_cam_target[0] = m_cam_pos[0] + fx * 10.0f;
+        m_cam_target[1] = m_cam_pos[1] + fy * 10.0f;
+        m_cam_target[2] = m_cam_pos[2] + fz * 10.0f;
+        m_cam_velocity[0] = m_cam_velocity[1] = m_cam_velocity[2] = 0.0f;
+        m_cam_zoom_velocity = 0.0f;
+
         const bool terrain_changed = m_scene.has_terrain != m_simulation_backup.has_terrain ||
             m_scene.terrain_grid_size != m_simulation_backup.terrain_grid_size ||
             m_scene.terrain_world_size != m_simulation_backup.terrain_world_size ||
@@ -3091,6 +3267,13 @@ void StudioApp::new_scene() {
     m_scene.name = "Untitled Scene";
     m_scene.filepath = "";
     deselect_all();
+    m_selected_material_id = 0;
+    m_cam_velocity[0] = m_cam_velocity[1] = m_cam_velocity[2] = 0.0f;
+    m_cam_zoom_velocity = 0.0f;
+    m_terrain_stroke = false;
+    m_terrain_has_previous_hit = false;
+    m_terrain_brush_enabled = false;
+    m_terrain_paint_layer = 0;
 
     // 1. 3D Editor Infinite Ground Grid Field (Plane 240x240m with procedural grid shader)
     Entity grid_field;
@@ -3344,8 +3527,19 @@ bool StudioApp::load_scene(const std::string& path) {
     m_scene = std::move(loaded_scene);
     rebuild_terrain();
     deselect_all();
+    m_selected_material_id = 0;
+    m_cam_velocity[0] = m_cam_velocity[1] = m_cam_velocity[2] = 0.0f;
+    m_cam_zoom_velocity = 0.0f;
     sync_scene_to_engine();
     m_history.reset(m_scene);
+
+    for (const auto& e : m_scene.entities) {
+        if (!e.editor_grid) {
+            select_entity(e.id, false, false);
+            focus_selected();
+            break;
+        }
+    }
     std::cout << "Scene loaded successfully from: " << path << std::endl;
     if (!m_project.filepath.empty()) { m_project.last_scene = path; save_project_registry(); }
     return true;

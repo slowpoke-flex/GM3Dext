@@ -1087,3 +1087,49 @@ The full development plan is **not complete**. In particular:
 - GameMaker export asks for a folder and warns before replacing scene, loader or terrain files. It checks missing resources, but external glTF dependencies are not packaged; use a self-contained GLB. Export is not fully transactional and failures after writing begins can leave a partial package.
 - Repeated exports reuse staged assets with identical content; different files sharing a name receive separate names. Existing unrelated assets are not overwritten.
 - `build/`, DLLs, logs and `scratch/` are ignored by Git. Rebuild the DLL and copy it to the example project when needed; `tools/check.ps1` does not copy it automatically. Never assume a local ignored DLL was pushed.
+
+---
+
+### 14. UI/UX Modernization, Transform Interpolation, and Asset Integration (2026-10-30)
+
+- **Per-Monitor V2 DPI Awareness & Desktop Sizing (`main.cpp`, `StudioApp.cpp`)**:
+  - Initialized `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` in `wWinMain`.
+  - Delivers crystal-clear 1:1 pixel rendering on high-DPI displays (such as standard 1080p laptops at 125% scaling), completely eliminating Desktop Window Manager (DWM) bitmap blurring and window coordinate virtualization clipping.
+  - Added desktop work-area detection via `SystemParametersInfoW(SPI_GETWORKAREA, ...)`; on screens $\le 1640 \times 940$, automatically clamps and centers the editor window with generous margins so no panels extend past the monitor edges.
+
+- **Dock Layout Architecture & Responsiveness (`StudioApp.cpp`)**:
+  - Eliminated the initial 1-frame uninitialized dock size race condition by deferring `DockBuilderRemoveNode` / `DockBuilderSplitNode` until the main viewport window size is verified ($\ge 400\text{px}$).
+  - Assigned optimal 3D DCC dock splits:
+    - **Right Dock (Hierarchy & Inspector/Materials)**: 28% ($\sim 420\text{px}$), split vertically into Hierarchy (top) and Inspector / Materials tabs (bottom).
+    - **Left Dock (Environment & Lighting)**: 24% ($\sim 360\text{px}$), displaying all three tabs (`Terrain`, `Lighting`, `Assets`) with zero tab-scrolling overflow.
+    - **Center Viewport**: $\sim 720\text{px}$ full 3D rendering canvas.
+
+- **Scene Hierarchy & Camera Focus UX (`StudioApp.cpp`, `StudioApp.h`)**:
+  - Restructured the top Hierarchy action bar into a 2-row layout with equalized half-width buttons (`+ Add Entity`, `Focus (F)`, `Group (Ctrl+G)`, `Unparent`), ensuring all buttons remain 100% visible regardless of dock resizing.
+  - Centralized camera framing logic into `StudioApp::focus_selected()`:
+    - Supports single entity or multi-entity bounding center calculations.
+    - Instantly triggered via Viewport toolbar button `Focus (F)`, Hierarchy toolbar button `Focus (F)`, 'F' keyboard shortcut, Hierarchy right-click context menu ("Focus Camera (F)"), or double-clicking any entity in the Scene Hierarchy tree.
+    - Automatically stops residual camera drift by zeroing out velocity vectors upon focusing.
+
+- **Responsive Materials Panel & Compact Mode (`StudioApp.cpp`)**:
+  - Designed an adaptive layout that checks available content width:
+    - **Compact Mode ($< 480\text{px}$)**: Replaces the rigid side-by-side pane with a clean top dropdown selector featuring real-time color swatches, an $80 \times 80$ Cook-Torrance GGX PBR preview sphere, and full-width property controls below.
+    - **Wide Mode ($\ge 480\text{px}$)**: Retains the master-detail two-column list and property inspector.
+  - Docked directly as a tab beside the Inspector in the bottom-right dock node, eliminating floating window occlusion over the 3D viewport.
+
+- **Viewport Toolbar & Interaction Enhancements (`StudioApp.cpp`)**:
+  - Quick Snap Increment Selector: Checking `"Snap"` reveals an inline combo box (`0.1m`, `0.25m`, `0.5m`, `1.0m`, `2.0m`, `5.0m`) for rapid grid alignment without opening menus.
+  - Color-coded Simulation Controls: Highlights `Play (P)` in emerald green and `Stop (P)` in bold crimson with clear shortcut indicators.
+  - Informative Window Title: Displays active scene filename and dirty indicators (`GM3D Studio - [Untitled Scene *]`), cached against redundant per-frame Win32 IPC calls.
+
+- **Smooth Movement & Physics Transform Interpolation (`PhysicsWorld.cpp`, `PhysicsWorld.h`)**:
+  - Root cause resolved: Jolt Physics updates at a fixed $60\text{Hz}$ timestep (`FIXED_TIME_STEP`). At variable or high refresh rates ($144\text{Hz}$+), dynamic bodies previously suffered visual micro-stutter due to time step aliasing.
+  - Implemented `TransformSample` and `BodyHistory` tracking in `PhysicsWorld`. Dynamic rigid bodies interpolate smoothly across render frames:
+    $$\alpha = \text{clamp}\left(\frac{\text{accumulator}}{\text{FIXED\_TIME\_STEP}}, 0.0, 1.0\right)$$
+    blending positions via linear interpolation and orientations via spherical linear interpolation (`SLERP`).
+  - Added smooth exponential velocity damping (`m_cam_velocity`) and zoom glide (`m_cam_zoom_velocity`) for WASD flight and mouse wheel navigation.
+
+- **GM3Dext Bridge Asset Integration**:
+  - Integrated 2.5D PBR shaders (`sh_moba_pbr.vsh`, `sh_moba_pbr.fsh`) and helper functions (`scr_draw_sprite_pbr.gml`) in `gml_example/bridge_pbr_sprites/`.
+  - Added `tools/generate_relief_maps.py`, implementing Euclidean Distance Transform (EDT) and Sobel filtering for automated sprite-to-PBR map generation (normals, depth, roughness/metallic/AO masks).
+  - Integrated rigged animated model `Skeleton_Warrior.glb` into `3Dreadymodels/`.

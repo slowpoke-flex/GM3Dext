@@ -2,28 +2,28 @@
 // GM3D Integration Example (GML Script / Object Events)
 // ==============================================================================
 
-// --- 1. CREATE EVENT (Инициализация) ---
+// --- 1. CREATE EVENT (Initialization) ---
 function gm3d_init() {
     global.GM3D_MAX_ENTITIES = 10000;
     
-    // Размер: Заголовок (64 байта) + N сущностей по 64 байта
+    // Size: Header (64 bytes) + N entities at 64 bytes each
     var header_size = 64;
     var entity_size = 64;
     var total_size = header_size + (global.GM3D_MAX_ENTITIES * entity_size);
 
-    // Создаем фиксированный буфер с выравниванием 1 байт
+    // Create fixed buffer aligned to 1 byte
     global.gm3d_buffer = buffer_create(total_size, buffer_fixed, 1);
     var buff_ptr = buffer_get_address(global.gm3d_buffer);
     var hwnd = window_handle();
 
-    // Заполняем дефолтный заголовок буфера
+    // Populate default buffer header
     buffer_seek(global.gm3d_buffer, buffer_seek_start, 0);
     buffer_write(global.gm3d_buffer, buffer_u32, $474D3344); // Magic: 'GM3D'
     buffer_write(global.gm3d_buffer, buffer_u32, 1);          // Version: 1
     buffer_write(global.gm3d_buffer, buffer_u32, 0);          // Entity count: 0
     buffer_write(global.gm3d_buffer, buffer_u32, global.GM3D_MAX_ENTITIES);
 
-    // Камера (положение X, Y, Z, таргет X, Y, Z, FOV, Near, Far)
+    // Camera (Position X, Y, Z, Target X, Y, Z, FOV, Near, Far)
     buffer_write(global.gm3d_buffer, buffer_f32, 0.0);  // Cam X
     buffer_write(global.gm3d_buffer, buffer_f32, 10.0); // Cam Y
     buffer_write(global.gm3d_buffer, buffer_f32, -15.0);// Cam Z
@@ -34,28 +34,27 @@ function gm3d_init() {
     buffer_write(global.gm3d_buffer, buffer_f32, 0.1);  // Near
     buffer_write(global.gm3d_buffer, buffer_f32, 1000.0);// Far
     buffer_write(global.gm3d_buffer, buffer_u32, 0);    // Flags
-    // Reserved (8 байт)
+    // Reserved (8 bytes)
     buffer_write(global.gm3d_buffer, buffer_u32, 0);
     buffer_write(global.gm3d_buffer, buffer_u32, 0);
 
-    // Вызов нативной DLL
+    // Call native DLL
     var init_res = init_extension(buff_ptr, total_size, hwnd, window_get_width(), window_get_height());
     if (init_res < 0) {
-        show_error("Ошибка инициализации GM3Dext: " + string(init_res), true);
+        show_error("Failed to initialize GM3Dext: " + string(init_res), true);
     }
 }
 
-// --- 2. STEP EVENT (Каждый кадр) ---
+// --- 2. STEP EVENT (Every frame) ---
 function gm3d_step() {
     var buff = global.gm3d_buffer;
-    var dt = delta_time / 1000000.0; // секунды
+    var dt = delta_time / 1000000.0; // seconds
 
-    // Пример записи сущностей:
-    // Обновляем количество сущностей в заголовке (байт 8..11)
+    // Update entity count in header (bytes 8..11)
     var num_entities = instance_number(obj_cube_3d);
     buffer_poke(buff, 8, buffer_u32, num_entities);
 
-    // Запись трансформаций объектов в буфер
+    // Write object transforms into shared buffer
     var header_size = 64;
     var entity_size = 64;
     var idx = 0;
@@ -94,10 +93,10 @@ function gm3d_step() {
         idx++;
     }
 
-    // Вызываем шаг физики и отрисовку в DLL
+    // Step physics and render in native DLL
     update_framework(dt);
 
-    // Считываем обновленные координаты динамических физических тел обратно в GameMaker:
+    // Read back updated coordinates of dynamic rigid bodies into GameMaker
     idx = 0;
     with (obj_cube_3d) {
         if (flags & 4) { // IS_RIGIDBODY
@@ -114,7 +113,7 @@ function gm3d_step() {
     }
 }
 
-// --- 3. CLEAN UP EVENT (Завершение работы) ---
+// --- 3. CLEAN UP EVENT (Shutdown) ---
 function gm3d_cleanup() {
     shutdown_extension();
     if (buffer_exists(global.gm3d_buffer)) {
