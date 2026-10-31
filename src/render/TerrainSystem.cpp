@@ -517,6 +517,22 @@ bool TerrainSystem::update_detail_splat(ID3D11Device* device, ID3D11DeviceContex
     }
 
     context->UpdateSubresource(m_detail_splat_texture.Get(), 0, nullptr, rgba.data(), S * 4, 0);
+
+    // One-shot dump for visual debugging: a PPM of the weight map (R=grass, G=rock,
+    // B=sand). Cheap, dependency-free, and the only way to tell a bad bake from a bad sample.
+    {
+        static bool dumped = false;
+        if (!dumped && std::getenv("GM3D_DUMP_SPLAT")) {
+            dumped = true;
+            if (FILE* f = fopen("build/splat_dump.ppm", "wb")) {
+                fprintf(f, "P6\n%u %u\n255\n", S, S);
+                for (size_t i = 0; i < static_cast<size_t>(S) * S; ++i) {
+                    fwrite(&rgba[i * 4], 1, 3, f);
+                }
+                fclose(f);
+            }
+        }
+    }
     return true;
 }
 

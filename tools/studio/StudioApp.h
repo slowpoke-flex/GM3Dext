@@ -52,6 +52,11 @@ public:
     void set_grass_demo(bool enabled) { m_grass_demo = enabled; }
     // Splits every frame into UI / sync / scene / ImGui / Present and logs the average.
     void set_frame_profile(bool enabled) { m_frame_profile = enabled; }
+    // px,py,pz,tx,ty,tz applied after the scene is built, for reproducible captures.
+    void set_startup_camera(const float values[6]);
+    // A/B switches for visual debugging (--no-shadows, --no-grass).
+    void set_disable_shadows(bool disable) { m_disable_shadows = disable; }
+    void set_disable_grass(bool disable) { m_disable_grass = disable; }
 
     LRESULT handle_message(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -265,6 +270,10 @@ private:
     int m_capture_frames = 30;
     int m_capture_frame = 0;
     bool m_grass_demo = false;
+    bool m_startup_camera_valid = false;
+    float m_startup_camera[6] = {};
+    bool m_disable_shadows = false;
+    bool m_disable_grass = false;
     bool capture_backbuffer(const std::string& path);
     void build_grass_demo();
 
