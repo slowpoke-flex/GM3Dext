@@ -761,6 +761,11 @@ function gm3d_load_scene_json(_scene_json_path, _asset_base_dir = "") {
                 show_debug_message("[GM3D Loader] Failed to generate terrain.");
                 return undefined;
             }
+            // The Studio's detail tiling knob: 0 leaves the flat macro colour, which is what a
+            // stylised scene wants. The DLL defaults to 1.0 (one photograph tile per 2.5 m).
+            if (variable_struct_exists(_terr, "detail_scale")) {
+                terrain_set_detail_scale(_terr.detail_scale);
+            }
             var _heights = variable_struct_exists(_terr, "heights") ? _terr.heights : [];
             var _weights = variable_struct_exists(_terr, "splatmap") ? _terr.splatmap : [];
             var _layers = variable_struct_exists(_terr, "layers") ? _terr.layers : [];
@@ -798,6 +803,16 @@ function gm3d_load_scene_json(_scene_json_path, _asset_base_dir = "") {
             _terrain_inst.physics_body_id = _terrain_body;
             array_push(_result.entities, _terrain_inst);
             if (variable_struct_exists(_terr, "grass_enabled") && _terr.grass_enabled) {
+                // Blade size and palette before anything is generated: a procedural rebuild
+                // keeps whatever the config holds, so a violet short carpet needs no baked
+                // grass.bin - it comes out of the same terrain the hills came from.
+                if (variable_struct_exists(_terr, "grass_height")) {
+                    var _gh = _terr.grass_height;
+                    var _gw = variable_struct_exists(_terr, "grass_width") ? _terr.grass_width : 0.22;
+                    var _ca = variable_struct_exists(_terr, "grass_color_a") ? _terr.grass_color_a : [0.20, 0.38, 0.13];
+                    var _cb = variable_struct_exists(_terr, "grass_color_b") ? _terr.grass_color_b : [0.30, 0.46, 0.16];
+                    grass_set_shape(_gh, _gw, _ca[0], _ca[1], _ca[2], _cb[0], _cb[1], _cb[2]);
+                }
                 grass_set_enabled(1.0);
                 var _wspd = variable_struct_exists(_terr, "grass_wind_speed") ? _terr.grass_wind_speed : 1.8;
                 var _wstr = variable_struct_exists(_terr, "grass_wind_strength") ? _terr.grass_wind_strength : 0.35;
@@ -805,6 +820,9 @@ function gm3d_load_scene_json(_scene_json_path, _asset_base_dir = "") {
                 var _grass_bin = _asset_base_dir + "grass.bin";
                 if (file_exists(_grass_bin)) {
                     grass_load_file(_grass_bin);
+                } else {
+                    grass_rebuild(variable_struct_exists(_terr, "grass_density") ? _terr.grass_density : 1.0,
+                                  _terr.seed);
                 }
             } else {
                 grass_set_enabled(0.0);

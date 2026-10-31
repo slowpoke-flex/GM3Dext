@@ -576,6 +576,14 @@ GM_EXPORT double GM_CALL material_clear_all() {
     }
 }
 
+GM_EXPORT double GM_CALL terrain_set_detail_scale(double scale) {
+    try {
+        return EngineContext::instance().terrain_set_detail_scale(scale);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
 GM_EXPORT double GM_CALL grass_set_enabled(double enabled) {
     try {
         return EngineContext::instance().grass_set_enabled(enabled);
@@ -595,6 +603,16 @@ GM_EXPORT double GM_CALL grass_set_wind(double dir_x, double dir_z, double speed
 GM_EXPORT double GM_CALL grass_rebuild(double density, double seed) {
     try {
         return EngineContext::instance().grass_rebuild(density, seed);
+    } catch (...) {
+        return GMResult::ERR_GENERAL;
+    }
+}
+
+GM_EXPORT double GM_CALL grass_set_shape(double height, double width,
+                                         double a_r, double a_g, double a_b,
+                                         double b_r, double b_g, double b_b) {
+    try {
+        return EngineContext::instance().grass_set_shape(height, width, a_r, a_g, a_b, b_r, b_g, b_b);
     } catch (...) {
         return GMResult::ERR_GENERAL;
     }
