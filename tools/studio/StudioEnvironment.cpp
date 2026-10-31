@@ -213,6 +213,9 @@ void StudioApp::draw_environment_panel() {
                     ImGui::DragFloat("##TerrainHeight", &m_terrain_height_input, 0.5f, 4.0f, 80.0f, "%.1f m");
                     ImGui::TextUnformatted("World size"); ImGui::SetNextItemWidth(-1);
                     ImGui::DragFloat("##TerrainSize", &m_terrain_world_input, 2.0f, 60.0f, 600.0f, "%.1f m");
+                    ImGui::TextUnformatted("Detail texture tiling"); ImGui::SetNextItemWidth(-1);
+                    ImGui::SliderFloat("##TerrainDetail", &m_scene.terrain_detail_scale, 0.0f, 3.0f, "%.2f x");
+                    HelpTooltip("Scales the world-space tiling of the terrain detail photographs. 0 leaves only the baked macro colour, which removes the visible tile grid on stylised ground.");
                     if (ImGui::Button("Regenerate terrain...", ImVec2(-1, 30))) ImGui::OpenPopup("Regenerate terrain?");
                 }
                 if (ImGui::BeginPopupModal("Regenerate terrain?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -249,6 +252,11 @@ void StudioApp::draw_environment_panel() {
                     }
                     HelpTooltip("Toggle procedural instanced 3D grass across terrain.");
 
+                    ImGui::ColorEdit3("Grass Color A", m_scene.grass_color_a, ImGuiColorEditFlags_NoInputs);
+                    HelpTooltip("Shaded end of the per-instance colour blend (root of the blade).");
+                    ImGui::ColorEdit3("Grass Color B", m_scene.grass_color_b, ImGuiColorEditFlags_NoInputs);
+                    HelpTooltip("Sunlit end of the per-instance colour blend. Changes apply on the next Fill Terrain (Procedural) or terrain rebuild.");
+
                     if (ImGui::Button("Paint Grass Tool", ImVec2(-1, 28))) {
                         m_terrain_brush_mode = TerrainBrushMode::Grass;
                         m_terrain_brush_enabled = true;
@@ -265,6 +273,10 @@ void StudioApp::draw_environment_panel() {
                             gcfg.max_distance = m_scene.grass_max_distance;
                             gcfg.wind_speed = m_scene.grass_wind_speed;
                             gcfg.wind_strength = m_scene.grass_wind_strength;
+                            for (int c = 0; c < 3; ++c) {
+                                gcfg.color_a[c] = m_scene.grass_color_a[c];
+                                gcfg.color_b[c] = m_scene.grass_color_b[c];
+                            }
                             rw_ui->get_grass_system().build_from_terrain(rw_ui->get_device(), rw_ui->get_terrain_system(), gcfg);
                             rw_ui->set_grass_enabled(true);
                             m_scene.grass_enabled = true;

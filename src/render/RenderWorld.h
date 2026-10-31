@@ -112,6 +112,11 @@ public:
     void set_shadow_quality(int quality, bool csm_enabled = true, int max_shadow_lights = 4);
     void set_sky_color(float r, float g, float b);
     void set_fog(float start, float end, float r = -1.0f, float g = -1.0f, float b = -1.0f);
+    // Multiplies the world-space tiling of the terrain detail photographs. 1.0 is the shipped
+    // ~2.5 m tile; 0 disables the detail pass and leaves the baked macro albedo, which is what
+    // a stylised scene wants (uniform colour, no visible tile grid).
+    void set_terrain_detail_scale(float scale) { m_terrain_detail_scale = scale; }
+    [[nodiscard]] float get_terrain_detail_scale() const noexcept { return m_terrain_detail_scale; }
     void set_vsync(bool enabled) { m_config.vsync = enabled; }
     [[nodiscard]] bool get_vsync() const noexcept { return m_config.vsync; }
 
@@ -252,6 +257,7 @@ private:
     float m_ambient_color[3] = { 0.22f, 0.28f, 0.38f };
     float m_ambient_intensity = 1.6f;
     float m_sky_color[4] = { 0.38f, 0.52f, 0.68f, 1.0f };
+    float m_terrain_detail_scale = 1.0f;
     float m_fog_start = 35.0f;
     float m_fog_end = 110.0f;
     float m_total_time = 0.0f;

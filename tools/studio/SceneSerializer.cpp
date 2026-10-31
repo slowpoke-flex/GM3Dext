@@ -105,6 +105,7 @@ bool SceneSerializer::save_to_file(const Scene& scene, const std::string& filepa
             {"world_size", scene.terrain_world_size},
             {"height_scale", scene.terrain_height_scale},
             {"seed", scene.terrain_seed},
+            {"detail_scale", scene.terrain_detail_scale},
             {"grass_enabled", scene.grass_enabled},
             {"grass_density", scene.grass_density},
             {"grass_height", scene.grass_height},
@@ -112,7 +113,9 @@ bool SceneSerializer::save_to_file(const Scene& scene, const std::string& filepa
             {"grass_max_distance", scene.grass_max_distance},
             {"grass_fade_range", scene.grass_fade_range},
             {"grass_wind_speed", scene.grass_wind_speed},
-            {"grass_wind_strength", scene.grass_wind_strength}
+            {"grass_wind_strength", scene.grass_wind_strength},
+            {"grass_color_a", {scene.grass_color_a[0], scene.grass_color_a[1], scene.grass_color_a[2]}},
+            {"grass_color_b", {scene.grass_color_b[0], scene.grass_color_b[1], scene.grass_color_b[2]}}
         };
 
         if (!scene.grass_clumps.empty()) {
@@ -322,6 +325,7 @@ bool SceneSerializer::load_from_file(Scene& scene, const std::string& filepath) 
             loaded.terrain_world_size = terr.value("world_size", 240.0f);
             loaded.terrain_height_scale = terr.value("height_scale", 32.0f);
             loaded.terrain_seed = terr.value("seed", 1337u);
+            loaded.terrain_detail_scale = terr.value("detail_scale", 1.0f);
             loaded.grass_enabled = terr.value("grass_enabled", false);
             loaded.grass_density = terr.value("grass_density", 1.0f);
             loaded.grass_height = terr.value("grass_height", 0.85f);
@@ -330,6 +334,12 @@ bool SceneSerializer::load_from_file(Scene& scene, const std::string& filepath) 
             loaded.grass_fade_range = terr.value("grass_fade_range", 25.0f);
             loaded.grass_wind_speed = terr.value("grass_wind_speed", 1.8f);
             loaded.grass_wind_strength = terr.value("grass_wind_strength", 0.35f);
+            const json color_a = terr.value("grass_color_a", json::array({0.20f, 0.38f, 0.13f}));
+            const json color_b = terr.value("grass_color_b", json::array({0.30f, 0.46f, 0.16f}));
+            for (int c = 0; c < 3; ++c) {
+                loaded.grass_color_a[c] = color_a.size() == 3 ? color_a[c].get<float>() : Scene{}.grass_color_a[c];
+                loaded.grass_color_b[c] = color_b.size() == 3 ? color_b[c].get<float>() : Scene{}.grass_color_b[c];
+            }
             loaded.grass_clumps.clear();
             if (terr.contains("grass_clumps") && terr["grass_clumps"].is_array()) {
                 for (const auto& item : terr["grass_clumps"]) {

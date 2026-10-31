@@ -257,6 +257,10 @@ void StudioApp::rebuild_terrain() {
         gcfg.wind_strength = m_scene.grass_wind_strength;
         gcfg.wind_dir[0] = m_scene.grass_wind_dir[0];
         gcfg.wind_dir[1] = m_scene.grass_wind_dir[1];
+        for (int c = 0; c < 3; ++c) {
+            gcfg.color_a[c] = m_scene.grass_color_a[c];
+            gcfg.color_b[c] = m_scene.grass_color_b[c];
+        }
         rw->get_grass_system().set_config(gcfg);
 
         if (m_scene.grass_enabled && !m_scene.grass_clumps.empty()) {
@@ -272,6 +276,12 @@ void StudioApp::rebuild_terrain() {
             }
             rw->get_grass_system().set_instances(insts, rw->get_device());
             rw->get_grass_system().snap_to_terrain(rw->get_terrain_system(), rw->get_device());
+            rw->set_grass_enabled(true);
+        } else if (m_scene.grass_enabled) {
+            // No painted clumps: fall back to the procedural carpet described by the scene's
+            // grass_* fields. This is what keeps a generated meadow scene a few kilobytes of
+            // JSON instead of a hundred thousand baked instances.
+            rw->get_grass_system().build_from_terrain(rw->get_device(), rw->get_terrain_system(), gcfg);
             rw->set_grass_enabled(true);
         } else {
             rw->get_grass_system().clear();

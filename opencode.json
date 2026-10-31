@@ -4,10 +4,30 @@
     "servers": {
       "gamemaker-docs": {
         "type": "local",
+        "command": ["node", "tools/gamemaker-mcp/src/gamemaker-docs-server.js"]
+      },
+      "gamemaker-run": {
+        "type": "local",
         "command": [
           "node",
-          "tools/gamemaker-mcp/src/gamemaker-docs-server.js"
-        ]
+          "C:/Users/Revo/.config/opencode/mcp/mcp-filter.mjs",
+          "C:/Users/Revo/.local/bin/morx-gms2-mcp.exe",
+          "serve",
+          "--project",
+          "C:/GM3Dext/MeadowDemo",
+          "--allow-run",
+          "--runtime-root",
+          "C:/ProgramData/GameMakerStudio2-LTS2026/Cache/runtimes/runtime-2026.0.0.23",
+          "--user-directory",
+          "C:/Users/Revo/AppData/Roaming/GameMakerStudio2-LTS2026"
+        ],
+        "cwd": "C:/GM3Dext/MeadowDemo",
+        "environment": {
+          "MCP_LABEL": "gamemaker-run",
+          "MCP_ALLOW": "server_info,inspect_project,install_runtime_bridge,runtime_status,run_game,compile_game,restart_game,stop_game,get_runtime_output,get_runtime_errors,capture_game,save_game_capture,inspect_game,send_game_input,send_game_mouse,trigger_game_event,wait_game_frames",
+          "PYTHONIOENCODING": "utf-8",
+          "PYTHONUTF8": "1"
+        }
       }
     }
   }

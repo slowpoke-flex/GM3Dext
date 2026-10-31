@@ -122,20 +122,60 @@ node tools\gamemaker-mcp\src\cli.js search "buffer_write"
 | `context7` | remote | 2 | Current docs/examples for libraries (cgltf, Jolt, ImGui). Free tier, rate-limited without a key. |
 | `deepwiki` | remote | 3 | `ask_wiki_question` / `read_wiki_*` over a GitHub repo. Useful for reading Jolt or cgltf instead of guessing. |
 | `gamemaker` | local | 22 of 225 | Project-aware GameMaker tooling: validation, static analysis, guarded edits. Read-only by default. |
+| `gamemaker-run` | local, per project | 17 of 58 | Runs a GameMaker project in an isolated copy and observes it: input, screenshots, runtime state. |
 | `renderdoc` | local | 15 | GPU frame capture analysis: draw calls, shader source and constant buffers, texture pixels, pipeline state. |
 
-Check them all with `opencode mcp list` (six lines including `gamemaker-docs`). Run it twice if `renderdoc` reports `pending` - the Python server needs a few seconds to answer `initialize`.
+Check them all with `opencode mcp list` (seven lines including `gamemaker-docs` and `gamemaker-run`). Run it twice if `renderdoc` reports `pending` - the Python server needs a few seconds to answer `initialize`.
+
+### Tool filtering
+
+Two servers register far more tools than this project uses (225 and 58). `%USERPROFILE%\.config\opencode\mcp\mcp-filter.mjs` is a transparent stdio proxy: it forwards every message unchanged except the response to `tools/list`, which it filters to `MCP_ALLOW`; a call to a filtered-out tool is answered locally with `-32601`. `MCP_LABEL` only names the server in its stderr line. Both servers run through it:
+
+```
+node mcp-filter.mjs <command> [args...]
+```
 
 ### gamemaker
 
 `npm install -g gamemaker-mcp@latest` installs version 2.0.0 (MIT). Two things are configured around it:
 
 - **Pinned project.** It auto-detects the `.yyp` of the workspace, which in a session opened at `C:\GM3Dext-SDF` binds it to the frozen checkout. `GAMEMAKER_PROJECT` is pinned to `C:\GM3Dext\3DTEST\3DTEST.yyp` instead, with `GAMEMAKER_MCP_MODE=read-only` and `GAMEMAKER_MCP_ALLOW_BUILD=0`.
-- **Tool filter.** The server registers 225 tools, most of them one-off GML generators (dungeon builders, CRT shaders, inventory drag-and-drop UI). `%USERPROFILE%\.config\opencode\mcp\gamemaker-filter.mjs` is a transparent stdio proxy that republishes 22 of them and rejects calls to the rest. The allowlist is `DEFAULT_TOOLS` in that file or the `GM_TOOLS` environment variable (comma separated):
+- **Tool filter.** 22 of its 225 tools are exposed:
 
   project introspection (`gm_project_info`, `gm_project_validate`, `gm_project_statistics`, `gm_project_health_score`, `gm_asset_list`, `gm_asset_read`, `gm_file_read`, `gm_code_search`, `gm_runtime_detect`), static analysis (`gm_gml_analyze`, `gm_gml_validate_snippet`, `gm_shader_analyze`, `gm_symbol_references`, `gm_asset_find_references`, `gm_draw_state_audit`, `gm_gml_profile_check`, `gm_gml_dead_code_detect`, `gm_dependency_graph`), build/edit (`gm_project_compile_errors`, `gm_job_status`, `gm_gml_patch_preview`, `gm_gml_patch`).
 
   Editing needs `GAMEMAKER_MCP_MODE=workspace-write`; compiling additionally needs `GAMEMAKER_MCP_ALLOW_BUILD=1`. Change the map in `opencode.json`, not in the server.
+
+### gamemaker-run
+
+`uv tool install morx-gms2-mcp` (0.6.2, Windows only, Python 3.10+) gives a server that copies the bound project into an isolated directory, compiles it through Igor, starts the real Runner and connects to an injected GML bridge. That bridge is why it can do what shell automation cannot: `send_game_input` / `send_game_mouse` / `trigger_game_event` reach the game without needing foreground focus, and `capture_game` reads `DrawGUIEnd`.
+
+It is configured per project, not machine-wide, because it pins one `.yyp`:
+
+```powershell
+morx-gms2-mcp bind --project C:\GM3Dext\MeadowDemo
+morx-gms2-mcp check --project C:\GM3Dext\MeadowDemo
+```
+
+`check` reports validator errors (it caught five stale `parent` references after renaming the project copy - every `.yy` keeps `"parent": {"name": ..., "path": "<project>.yyp"}` and all of them have to be rewritten). The server entry lives in the repository `opencode.json` with `--allow-run`, the runtime root and the user directory; `--write` is deliberately absent, so it cannot edit the project, only run and observe it.
+
+## Meadow scene generator
+
+`tools/meadow_scene.py` writes `scenes/meadow.json`: hills from three sine bands, a violet
+grass carpet, one `UAL1_Standard.glb` character and a hazy lavender sky. The Studio renders it
+headless, and the script prints the camera line to use:
+
+```powershell
+python tools\meadow_scene.py
+build\GM3DStudio.exe --scene scenes\meadow.json --camera -4,12.62,-11.86,4,16.34,2 --screenshot shot.png --frames 40
+```
+
+Why the file is a few hundred kilobytes and not a few megabytes: no baked grass clumps (the
+procedural carpet is rebuilt from the `grass_*` fields), and a `splatmap` of `255,0,0,0`
+everywhere, which is what makes the terrain honour the scene's layer colours at all. See
+`DEV_WIKI.md` §42 for the four renderer knobs this scene needed.
+
+## Scene capture and startup automation
 
 ### renderdoc
 
@@ -152,7 +192,6 @@ The extension lands in `%APPDATA%\qrenderdoc\extensions\renderdoc_mcp_bridge`. E
 ## Scene capture and startup automation
 
 The editor can be driven from the command line, which is what most automated checks use:
-
 ```powershell
 .\build\GM3DStudio.exe --scene "C:\path\scene.json" --screenshot "build\shot.png" --frames 40 --log "build\shot.log"
 ```
