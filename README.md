@@ -34,6 +34,10 @@
 - Resilient asset library with thumbnails, category filters and one-click relinking of moved files.
 - GameMaker LTS exporter: writes the scene JSON, the GML loader and staged assets into a project folder.
 
+`docs/STUDIO_GUIDE.md` walks the whole authoring loop: which settings live in the Studio, what
+the export contains, what has to be wired in GameMaker (extension, scripts, datafiles, entity
+buffer, `update_framework`), and the failure modes in between.
+
 ## Building from source
 
 ### Requirements
