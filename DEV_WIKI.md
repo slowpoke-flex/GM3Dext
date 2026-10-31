@@ -2032,3 +2032,37 @@ bridge reported `bridge_ready: true`, `frame: 120`, `compile_error_count: 0`. Re
 the bridge: `dbg_scene_ok = true`, `dbg_grass = 251001`, terrain height under the camera
 10.87 against the generator's 10.87, under the character 15.21 against 15.24. The violet
 meadow renders with the animated `UAL1_Standard` character on the crest.
+
+---
+
+## 44. Third-person control over an exported scene (2026-10-31)
+
+`obj_meadow` in `MeadowDemo` now does what the showcase object did, minus 57 KB of demo code:
+load the scene, push entities into the shared buffer, tick the engine, and walk the character
+around with the camera behind him.
+
+- **"1" takes control.** The room starts on the fixed Studio shot (same camera line as
+  `tools\meadow_scene.py` prints), and pressing `1` switches to a follow camera: 6 m behind,
+  WASD relative to the camera yaw, A/D strafe, Shift jogs, right-mouse drag orbits.
+- **The character walks on the terrain**, not on a plane: `y = gm3d_terrain_get_height(x, z)`
+  every step, and the model turns to face the direction of travel through the Y quaternion.
+- **Clips** (indices in `UAL1_Standard.glb`): 9 `Idle_Loop`, 42 `Walk_Loop`, 13 `Jog_Fwd_Loop`.
+  The animation is only re-triggered on a state change, because `gm3d_anim_play` restarts the
+  clip.
+
+### GML scoping trap worth remembering
+
+```gml
+player = noone;
+with (obj_3d_entity) {
+    if (mesh_id >= 100) player = id;   // WRONG: writes `player` on the entity
+}
+```
+
+Inside `with`, a plain assignment targets the *with* instance, not the caller - it silently
+creates an instance variable on every entity and leaves the caller's `player` as `noone`. The
+symptom is a follow camera that never engages while `follow` is `true` and every other value
+looks right. Use `other.player = id;`.
+
+The same rule bit the reference search for the character: scene entities are `obj_3d_entity`
+instances whose `mesh_id` is below 100 for engine primitives and 100+ for loaded models.

@@ -92,9 +92,9 @@ def main():
             # is the flat macro colour and the blades carry the texture.
             "detail_scale": 0.0,
             "grass_enabled": True,
-            "grass_density": 3.0,
-            "grass_height": 0.22,
-            "grass_width": 0.15,
+            "grass_density": 4.0,
+            "grass_height": 0.17,
+            "grass_width": 0.30,
             "grass_max_distance": 70.0,
             "grass_fade_range": 22.0,
             "grass_wind_speed": 1.2,
