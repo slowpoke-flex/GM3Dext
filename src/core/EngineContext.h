@@ -85,11 +85,15 @@ public:
     double terrain_generate(double grid_size, double world_size, double height_scale, double seed);
     double terrain_get_height(double x, double z);
     double terrain_apply_edit_data(const void* data, double size_bytes);
+    double terrain_set_detail_scale(double scale);
 
     // Procedural Grass & Foliage
     double grass_set_enabled(double enabled);
     double grass_set_wind(double dir_x, double dir_z, double speed, double strength);
     double grass_rebuild(double density, double seed);
+    double grass_set_shape(double height, double width,
+                           double a_r, double a_g, double a_b,
+                           double b_r, double b_g, double b_b);
     double grass_get_count();
     double grass_clear();
     double grass_load_file(const char* filepath);

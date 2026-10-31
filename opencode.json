@@ -16,10 +16,11 @@
           "--project",
           "C:/GM3Dext/MeadowDemo",
           "--allow-run",
+          "--write",
           "--runtime-root",
           "C:/ProgramData/GameMakerStudio2-LTS2026/Cache/runtimes/runtime-2026.0.0.23",
           "--user-directory",
-          "C:/Users/Revo/AppData/Roaming/GameMakerStudio2-LTS2026"
+          "C:/Users/Revo/AppData/Roaming/GameMakerStudio2-LTS2026/revomarkone_5126120"
         ],
         "cwd": "C:/GM3Dext/MeadowDemo",
         "environment": {

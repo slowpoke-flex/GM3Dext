@@ -1955,3 +1955,80 @@ build\GM3DStudio.exe --scene scenes\meadow.json --camera -4,12.62,-11.86,4,16.34
 
 The generator prints the camera line it expects. `UAL1_Standard.glb` carries 43 clips and the
 character uses index 9 (`Idle_Loop`).
+
+---
+
+## 43. Getting the meadow into the real Runner (2026-10-31)
+
+The scene looked right in the Studio but the first `Run` of the project showed the island
+showcase, and the first run of a freshly wired project showed a black window. Four things
+between "scene file" and "pixels in the Runner":
+
+### 1. A copied project keeps a copied DLL
+
+`MeadowDemo` was cloned from `3DTEST`, so `extensions/GM3Dext/GM3Dext.dll` was a copy from
+before this session. The scene loader calls `grass_set_shape()` and
+`terrain_set_detail_scale()`, which only exist in the new build; the exported `.gml` and the
+`.yy` function table were new, the binary was not. Symptom: a window that stays black, no
+runtime error in the bridge. Refresh the DLL after every engine change - `tools\run_in_runner.ps1`
+does this, and so does any manual copy.
+
+### 2. The engine only draws when ticked
+
+`update_framework(delta_time / 1000000.0)` is what runs the frame: simulation, frustum
+culling, present. The showcase object called it at the end of its Step event; nothing else in
+the SDK does. An object that loads a scene and sets a camera but never calls it produces a
+black window with a healthy, heartbeating bridge. This is the single most confusing failure
+mode of the whole integration, because every diagnostic says "running".
+
+### 3. Entities are not in the scene file, they are in a buffer GML writes
+
+`gm3d_load_scene_json` creates `obj_3d_entity` instances, but the DLL never looks at GML
+objects: it reads the 64-byte entity records from the shared buffer. In `3DTEST` that buffer
+was written by `obj_3d_demo`'s Step event, so removing the showcase from the room also removed
+the only writer. The result is terrain and grass (generated inside the DLL) with no scattered
+entities - exactly "the character is missing" with no error anywhere. `obj_meadow` now writes
+the buffer itself:
+
+```gml
+var _buff = global.gm3d_buffer;
+buffer_poke(_buff, 8, buffer_u32, instance_number(obj_3d_entity));
+var _idx = 0;
+with (obj_3d_entity) { ...GM3D_HEADER_SIZE + _idx * GM3D_ENTITY_SIZE... _idx++; }
+```
+
+### 4. Where morx-gms2-mcp looks for the runtime and the licence
+
+`run_game` validates `<runtime-root>/bin/igor/windows/x64/Igor.exe` and
+`<user-directory>/licence.plist`. The account directory is one level below the obvious one:
+
+```
+--runtime-root   C:/ProgramData/GameMakerStudio2-LTS2026/Cache/runtimes/runtime-2026.0.0.23
+--user-directory C:/Users/Revo/AppData/Roaming/GameMakerStudio2-LTS2026/revomarkone_5126120
+```
+
+`%APPDATA%\GameMakerStudio2-LTS2026` itself has `um.json` but no licence; the plist lives in
+the per-account folder next to `local_settings.json`.
+
+### capture_game reads the wrong surface
+
+`capture_game` grabs the game at `DrawGUIEnd`, i.e. GameMaker's own surface. The renderer
+presents through its own swap chain, so the bridge capture of a 3D frame is uniformly black
+even when the window looks correct. Use a desktop capture of the window instead
+(`CopyFromScreen` over the game's HWND) when the 3D content itself is what needs checking.
+
+### Datafiles with subfolders
+
+Included files can live in subdirectories: `"filePath":"datafiles"` with
+`"name":"assets/UAL1_Standard.glb"` ships to `<game>/assets/UAL1_Standard.glb`, and the
+loader resolves `assets/...` relative to the game directory. GameMaker also writes a flattened
+copy at the root, which is why both `UAL1_Standard.glb` and `assets/UAL1_Standard.glb` appear
+in the build output.
+
+### Verified in the Runner
+
+`morx-gms2-mcp` compiled the project in an isolated copy, started the real Runner and the
+bridge reported `bridge_ready: true`, `frame: 120`, `compile_error_count: 0`. Read back through
+the bridge: `dbg_scene_ok = true`, `dbg_grass = 251001`, terrain height under the camera
+10.87 against the generator's 10.87, under the character 15.21 against 15.24. The violet
+meadow renders with the animated `UAL1_Standard` character on the crest.

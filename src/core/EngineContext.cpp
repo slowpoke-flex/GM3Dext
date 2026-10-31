@@ -615,6 +615,13 @@ double EngineContext::raycast(double fx, double fy, double fz, double tx, double
 }
 
 
+double EngineContext::terrain_set_detail_scale(double scale) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    m_render_world->set_terrain_detail_scale(static_cast<float>(scale));
+    return GMResult::OK;
+}
+
 double EngineContext::grass_set_enabled(double enabled) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
@@ -634,6 +641,27 @@ double EngineContext::grass_rebuild(double density, double seed) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
     m_render_world->rebuild_grass(static_cast<float>(density), static_cast<uint32_t>(seed));
+    return GMResult::OK;
+}
+
+// Blade size and the two ends of the colour blend. The procedural carpet keeps whatever the
+// config holds, so a scene can paint a violet meadow without baking 250k instances into a
+// grass.bin: set the shape, then grass_rebuild().
+double EngineContext::grass_set_shape(double height, double width,
+                                      double a_r, double a_g, double a_b,
+                                      double b_r, double b_g, double b_b) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_is_initialized || !m_render_world) return GMResult::ERR_NOT_INITIALIZED;
+    GM3D::GrassConfig cfg = m_render_world->get_grass_system().get_config();
+    cfg.base_height = static_cast<float>(height);
+    cfg.base_width = static_cast<float>(width);
+    cfg.color_a[0] = static_cast<float>(a_r);
+    cfg.color_a[1] = static_cast<float>(a_g);
+    cfg.color_a[2] = static_cast<float>(a_b);
+    cfg.color_b[0] = static_cast<float>(b_r);
+    cfg.color_b[1] = static_cast<float>(b_g);
+    cfg.color_b[2] = static_cast<float>(b_b);
+    m_render_world->get_grass_system().set_config(cfg);
     return GMResult::OK;
 }
 
