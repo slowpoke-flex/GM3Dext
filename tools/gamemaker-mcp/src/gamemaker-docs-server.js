@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -343,8 +343,12 @@ async function main() {
     await server.run();
 }
 
-// ES module equivalent of require.main === module
-if (import.meta.url === `file://${process.argv[1]}`) {
+// ES module equivalent of require.main === module.
+// Upstream compared against `file://${process.argv[1]}`, which never matches on Windows: argv[1]
+// is a backslash path without the file:// prefix, so main() was silently skipped and the server
+// idled on stdin without ever answering `initialize`. Building a file URL makes the check
+// platform independent.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
     main().catch(error => {
         console.error('Server failed:', error);
         process.exit(1);
