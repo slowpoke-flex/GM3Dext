@@ -20,24 +20,38 @@ if (follow && instance_exists(player)) {
     var _cy = _win_h * 0.5;
 
     // --- mouse look ---------------------------------------------------------------------
+    // Deltas from the previous position, not "distance to the window centre": recentring the
+    // cursor every frame only works if the warp really lands where we asked, and when it does
+    // not (scaled window, lost focus) the residual offset turns into a constant spin. The
+    // cursor is only pushed back when it reaches the edge, where deltas would stop.
+    var _mx = window_mouse_get_x();
+    var _my = window_mouse_get_y();
+
     if (mouse_check_button_pressed(mb_right)) {
-        window_mouse_set(_cx, _cy);
         mouse_free = false;
         window_set_cursor(cr_none);
+        mouse_prev_x = _mx;
+        mouse_prev_y = _my;
     }
-    if (mouse_check_button_released(mb_right)) {
+
+    if (!mouse_free && mouse_check_button(mb_right) && window_has_focus()) {
+        var _dx = _mx - mouse_prev_x;
+        var _dy = _my - mouse_prev_y;
+        cam_yaw += _dx * 0.22;                                // mouse right turns right
+        cam_pitch = clamp(cam_pitch + _dy * 0.18, -20, 60);   // mouse up (dy < 0) tilts the view up
+        mouse_prev_x = _mx;
+        mouse_prev_y = _my;
+
+        if (_mx < 48 || _mx > _win_w - 48 || _my < 48 || _my > _win_h - 48) {
+            window_mouse_set(_cx, _cy);
+            mouse_prev_x = _cx;
+            mouse_prev_y = _cy;
+        }
+    }
+
+    if (!mouse_free && (mouse_check_button_released(mb_right) || !window_has_focus())) {
         mouse_free = true;
         window_set_cursor(cr_default);
-    }
-    if (!mouse_free) {
-        if (!window_has_focus()) {
-            mouse_free = true;
-            window_set_cursor(cr_default);
-        } else {
-            cam_yaw += (window_mouse_get_x() - _cx) * 0.20;
-            cam_pitch = clamp(cam_pitch - (window_mouse_get_y() - _cy) * 0.16, -20, 60);
-            window_mouse_set(_cx, _cy);
-        }
     }
 
     cam_dist = clamp(cam_dist - (mouse_wheel_up() - mouse_wheel_down()) * 0.8, 2.0, 14.0);
