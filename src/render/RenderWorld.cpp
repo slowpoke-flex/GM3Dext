@@ -498,7 +498,7 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
                 // The tint only follows the grass/sand layers, otherwise the stone plaza and the
                 // cliff faces pick up a green cast from the meadow palette.
                 float macroLum = max(dot(baseColor, float3(0.299, 0.587, 0.114)), 0.001);
-                float3 macroTint = lerp(float3(1.0, 1.0, 1.0), baseColor / macroLum, 0.55);
+                float3 macroTint = lerp(float3(1.0, 1.0, 1.0), baseColor / macroLum, 0.90);
                 macroTint = lerp(float3(1.0, 1.0, 1.0), macroTint, saturate(w.x + 0.3 * w.z));
                 baseColor = lerp(baseColor, detailAlbedo * macroTint, detailFade);
 
@@ -747,8 +747,11 @@ float4 PS_Sky(VS_SkyOut input) : SV_Target {
     float up = saturate(dir.y);
     float k = pow(up, 0.45f);
 
-    float3 horizon = float3(0.40f, 0.62f, 0.88f);
-    float3 zenith = float3(0.08f, 0.26f, 0.72f);
+    // The scene's sky colour doubles as the fog colour, so horizon and haze always agree.
+    // Deriving the zenith from it keeps one authored knob for the whole sky instead of the
+    // three hardcoded blues the dome used to carry.
+    float3 horizon = FogColor * 1.15f;
+    float3 zenith = FogColor * float3(0.55f, 0.62f, 1.00f);
     float3 c = (dir.y >= 0.0f)
         ? lerp(horizon, zenith, k)
         : lerp(horizon, float3(0.20f, 0.28f, 0.38f), saturate(-dir.y * 2.0f));
@@ -1943,7 +1946,7 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
                 m_texture_manager.has_texture(GM3D::TexId::ROCK) &&
                 m_texture_manager.has_texture(GM3D::TexId::SAND) &&
                 m_texture_manager.has_texture(GM3D::TexId::COBBLE);
-            if (detail_ready) matProps.pad[0] = 0.40f; // ~2.5 m per detail tile
+            if (detail_ready) matProps.pad[0] = 0.40f * m_terrain_detail_scale; // ~2.5 m per detail tile
         }
 
         // Presets get real photographs for their dominant surface.

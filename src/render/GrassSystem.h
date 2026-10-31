@@ -22,6 +22,11 @@ struct GrassConfig {
     float wind_speed = 1.8f;        // Wind oscillation frequency
     float wind_strength = 0.35f;    // Maximum sway displacement
     float wind_dir[2] = { 0.707f, 0.707f }; // Wind direction vector (X, Z)
+    // Two ends of the per-instance colour blend. The default pair is the alpine green the
+    // generator used to hardcode; a scene can repaint the whole carpet (violet meadow, dry
+    // savanna, autumn field) without touching the shader.
+    float color_a[3] = { 0.20f, 0.38f, 0.13f }; // shaded biome end
+    float color_b[3] = { 0.30f, 0.46f, 0.16f }; // sunlit biome end
     uint32_t seed = 4242;           // Procedural distribution seed
 };
 

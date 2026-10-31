@@ -259,6 +259,9 @@ struct Scene {
     float terrain_world_size = 240.0f;
     float terrain_height_scale = 32.0f;
     uint32_t terrain_seed = 1337;
+    // Multiplier on the world-space terrain detail tiling (1.0 = shipped ~2.5 m tile,
+    // 0 = no photo detail, stylised flat colour).
+    float terrain_detail_scale = 1.0f;
     uint32_t terrain_body_id = 0;
     std::vector<float> terrain_heights; // Empty means procedural terrain.
     std::vector<TerrainMaterialLayer> terrain_layers;
@@ -274,6 +277,10 @@ struct Scene {
     float grass_wind_speed = 1.8f;
     float grass_wind_strength = 0.35f;
     float grass_wind_dir[2] = { 0.707f, 0.707f };
+    // Per-instance colour range for the procedural carpet. Defaults keep the alpine green
+    // the generator shipped with; a violet meadow just moves both ends.
+    float grass_color_a[3] = { 0.20f, 0.38f, 0.13f };
+    float grass_color_b[3] = { 0.30f, 0.46f, 0.16f };
     std::vector<SceneGrassClump> grass_clumps;
 
     Entity* find_entity(uint32_t id) {

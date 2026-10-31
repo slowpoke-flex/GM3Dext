@@ -465,6 +465,7 @@ void StudioApp::sync_scene_to_engine() {
     ctx.set_ambient_light(m_scene.ambient_color[0], m_scene.ambient_color[1], m_scene.ambient_color[2], m_scene.ambient_intensity);
     ctx.set_sky_color(m_scene.sky_color[0], m_scene.sky_color[1], m_scene.sky_color[2]);
     ctx.set_fog(m_scene.fog_start, m_scene.fog_end, m_scene.sky_color[0], m_scene.sky_color[1], m_scene.sky_color[2]);
+    if (auto* rw_detail = ctx.get_render_world()) rw_detail->set_terrain_detail_scale(m_scene.terrain_detail_scale);
 }
 
 void StudioApp::render() {

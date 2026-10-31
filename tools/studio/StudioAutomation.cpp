@@ -111,6 +111,10 @@ void StudioApp::build_grass_demo() {    auto* rw = EngineContext::instance().get
     cfg.fade_range = m_scene.grass_fade_range;
     cfg.wind_speed = m_scene.grass_wind_speed;
     cfg.wind_strength = m_scene.grass_wind_strength;
+    for (int c = 0; c < 3; ++c) {
+        cfg.color_a[c] = m_scene.grass_color_a[c];
+        cfg.color_b[c] = m_scene.grass_color_b[c];
+    }
     rw->get_grass_system().build_from_terrain(rw->get_device(), rw->get_terrain_system(), cfg);
     rw->set_grass_enabled(true);
     m_scene.grass_enabled = true;

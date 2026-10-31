@@ -424,7 +424,7 @@ void GrassSystem::build_from_terrain(ID3D11Device* device, const TerrainSystem& 
     const uint32_t seed = config.seed;
 
     int32_t steps = static_cast<int32_t>(world_size / base_spacing);
-    steps = std::clamp(steps, 20, 420);
+    steps = std::clamp(steps, 20, 500);
 
     for (int32_t iz = -steps / 2; iz <= steps / 2; ++iz) {
         for (int32_t ix = -steps / 2; ix <= steps / 2; ++ix) {
@@ -478,13 +478,11 @@ void GrassSystem::build_from_terrain(ID3D11Device* device, const TerrainSystem& 
             // Individual wind phase
             inst.wind_phase = hash01(ix, iz, seed + 505u) * 6.2831853f;
 
-            // Natural biome color variation (lush alpine emerald to sunlit golden-green)
+            // Natural biome color variation between the two ends of the configured range.
             float color_blend = hash01(ix, iz, seed + 606u);
-            float r0 = 0.20f, g0 = 0.38f, b0 = 0.13f; // Alpine lush green
-            float r1 = 0.30f, g1 = 0.46f, b1 = 0.16f; // Sunlit golden green
-            inst.r = r0 + (r1 - r0) * color_blend;
-            inst.g = g0 + (g1 - g0) * color_blend;
-            inst.b = b0 + (b1 - b0) * color_blend;
+            inst.r = config.color_a[0] + (config.color_b[0] - config.color_a[0]) * color_blend;
+            inst.g = config.color_a[1] + (config.color_b[1] - config.color_a[1]) * color_blend;
+            inst.b = config.color_a[2] + (config.color_b[2] - config.color_a[2]) * color_blend;
             inst.pad[0] = 0.0f;
             inst.pad[1] = 0.0f;
 
