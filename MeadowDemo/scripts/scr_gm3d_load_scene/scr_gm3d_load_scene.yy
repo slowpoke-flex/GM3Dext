@@ -1,0 +1,13 @@
+{
+  "$GMScript":"v1",
+  "%Name":"scr_gm3d_load_scene",
+  "isCompatibility":false,
+  "isDnD":false,
+  "name":"scr_gm3d_load_scene",
+  "parent":{
+    "name":"MeadowDemo",
+    "path":"MeadowDemo.yyp"
+  },
+  "resourceType":"GMScript",
+  "resourceVersion":"2.0"
+}

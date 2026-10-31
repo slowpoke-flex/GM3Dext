@@ -1,0 +1,7 @@
+{
+  "FolderOrderSettings":[],
+  "ResourceOrderSettings":[
+    {"name":"GM3Dext","order":1,"path":"extensions/GM3Dext/GM3Dext.yy",},
+    {"name":"sys_morx_runtime","order":2,"path":"objects/sys_morx_runtime/sys_morx_runtime.yy",},
+  ],
+}
