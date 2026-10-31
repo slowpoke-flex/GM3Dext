@@ -1578,3 +1578,54 @@ Trade-off to revisit: the far terrain is now back to the flat macro colour. A pr
 | `GM3D_DUMP_SPLAT=1` | Writes `build/splat_dump.ppm` (the terrain weight map) on the first bake |
 
 Temporarily returning a value straight from the pixel shader (`return float4(w.x, w.y, w.z, 1);`) is the quickest way to prove whether a pattern comes from the weights, the albedo or the lighting - but remember that a broken shader still lets the Studio start, so always run `GM3DShaderCheck.exe` after such an experiment.
+
+---
+
+## 37. Sparkling specular shards on the terrain (2026-10-31)
+
+Follow-up to section 36. After the tiling fade the pale patches changed colour but did not go away: the terrain still showed **dithered white shards with straight triangle edges**, shimmering with camera movement.
+
+### What it was not
+
+Each of these was ruled out by measurement, not by reading the code:
+
+| Suspect | Test | Result |
+|:---|:---|:---|
+| Z-fighting / a second surface | batch dump + depth func set to `ALWAYS` | one batch, one instance; shards survive with the depth test disabled |
+| Shadows | `--no-shadows` (which now really disables them) | pixel diff max 17, shards unchanged |
+| Grass | `--no-grass` | bit-identical frame |
+| Particles | particle pass disabled | bit-identical frame |
+| Terrain detail textures | `MatPad.x = 0` | shards unchanged |
+| Albedo | terrain albedo replaced by white | faint but present |
+| Vertex normals | normals rendered as colour (before and after normal mapping) | smooth |
+| World position | `frac(WorldPos * 0.25)` rendered | smooth |
+| Depth / mesh UVs | `frac(UV * 4)` and a dump of the splat map | both smooth |
+
+Returning a constant colour from the pixel shader made the shards disappear entirely, so they live in the terrain's own shading.
+
+### The cause
+
+Probing the individual lighting terms (a temporary `GM3D_DEBUG_MODE` switch inside `PS_Main`) isolated it to **specular**: `directLight` showed the shards, `ambient` did not, and `specular` alone reproduced them exactly. Forcing `roughness = 0.85` unconditionally removed them.
+
+The terrain block was therefore not running for part of the surface. It was gated on `(int)input.Param.y == 5`, and rendering that comparison as red/black showed the black shards exactly where the test failed: the per-instance parameter is not reliable per pixel on the heightfield. Those fragments fell through to the default material (roughness 0.45, glossy) instead of the terrain's matte 0.85, and the GGX lobe exploded at grazing angles into bright speckles that ACES clipped to white.
+
+### The fix
+
+The terrain is no longer identified by instance data. `draw_batch_items` stamps the terrain batch with a sentinel in the material constant buffer and pins its surface response there:
+
+```cpp
+if (albedo_id == GM3D::TexId::TERRAIN) {
+    matProps.preset_id  = -5;      // sentinel matched by PS_Main
+    matProps.roughness  = 0.85f;
+    matProps.metallic   = 0.01f;
+    if (detail_ready) matProps.pad[0] = 0.40f;
+}
+```
+
+and the pixel shader keys the terrain path on `matId == -5`. Because the flag and the roughness now come from the per-batch constant buffer, every terrain fragment takes the same path regardless of what the instance slot happens to contain.
+
+### Lessons
+
+- When a bug appears only on some pixels of one draw, the first thing to question is **per-instance data**: it is supposed to be constant, so if behaviour varies per pixel either the attribute is not what you think or the pixel is not from that draw. Rendering the predicate itself as a colour answered the question in one frame.
+- A glossy default material on a large ground plane is a reliable way to produce suspiciously bright artefacts. Ground should have an explicit roughness in the material constants, not a value assigned inside a shader branch.
+- The `--no-grass` / `--no-shadows` / `--camera` flags from section 36 were what made this bisection possible; every dead end above cost one screenshot.

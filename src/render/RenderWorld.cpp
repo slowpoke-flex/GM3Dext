@@ -425,7 +425,11 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
     // carries biome colour (~8 texels/m), far too coarse to read as a surface, so it is
     // demoted to a large-scale hue tint here (texture ID 5 only).
     // --------------------------------------------------------------------------------------------
-    if ((int)input.Param.y == 5) {
+    // Terrain is identified by a material-constant sentinel rather than by the per-instance
+    // texture id: the instance parameter proved unreliable per pixel on the heightfield,
+    // which dropped part of the surface onto the glossy default material and produced
+    // sparkling specular shards. Roughness is also pinned here, in the material constants.
+    if (matId == -5) {
         float distToCam = length(input.WorldPos - CameraPos);
         if (MatPad.x > 0.0) {
             float4 splat = SplatMap.Sample(TextureSampler, input.UV);
@@ -1902,14 +1906,20 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
             }
         }
 
-        // Terrain: enable the world-space detail blend only when the splat map exists and
-        // all four CC0 sets were loaded. Otherwise the shader falls back to the old
-        // procedural grain, so a build without assets/ still looks intentional.
-        if (albedo_id == GM3D::TexId::TERRAIN && m_terrain_system.has_detail_splat() &&
-            m_texture_manager.has_texture(GM3D::TexId::GRASS) && m_texture_manager.has_texture(GM3D::TexId::ROCK) &&
-            m_texture_manager.has_texture(GM3D::TexId::SAND) && m_texture_manager.has_texture(GM3D::TexId::COBBLE)) {
-            matProps.pad[0] = 0.40f; // ~2.5 m per detail tile
-
+        // Terrain: mark the material so the shader always takes the terrain path, pin its
+        // matte response in the constants, and enable the world-space detail blend only when
+        // the splat map and all four CC0 sets are present. Without assets the shader falls
+        // back to the procedural grain, so a build with no textures still looks intentional.
+        if (albedo_id == GM3D::TexId::TERRAIN) {
+            matProps.preset_id = -5;      // sentinel matched by PS_Main
+            matProps.roughness = 0.85f;
+            matProps.metallic = 0.01f;
+            const bool detail_ready = m_terrain_system.has_detail_splat() &&
+                m_texture_manager.has_texture(GM3D::TexId::GRASS) &&
+                m_texture_manager.has_texture(GM3D::TexId::ROCK) &&
+                m_texture_manager.has_texture(GM3D::TexId::SAND) &&
+                m_texture_manager.has_texture(GM3D::TexId::COBBLE);
+            if (detail_ready) matProps.pad[0] = 0.40f; // ~2.5 m per detail tile
         }
 
         // Presets get real photographs for their dominant surface.
