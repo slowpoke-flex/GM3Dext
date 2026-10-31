@@ -1819,3 +1819,50 @@ The same thing is available as Windows Settings -> System -> Display -> Graphics
 - The demo's keyboard/mouse shortcuts could not be exercised: synthetic `SendKeys`/clicks from the automation scripts do not reach GameMaker's input state. GUI interactive testing needs a human or a real input injection driver.
 - Particle systems and spawn-key effects were not triggered for the same reason; they are still only covered by the editor and the shader check.
 - The exported `gm3d_*` GML API (59 registered functions) is exercised only as far as the demo calls it.
+
+---
+
+## 41. Splitting the editor out of one 250 KB file (2026-10-31)
+
+`tools/studio/StudioApp.cpp` had grown to **5217 lines / 248 KB** holding the whole editor: every panel, every dialog, the terrain brush, the file handling and the frame loop. Every UI change meant scrolling through it, and there was no way to compile a panel without compiling everything. It is now 678 lines plus eleven focused translation units.
+
+### Where things live now
+
+| File | Lines | Contents |
+|:---|:---|:---|
+| `StudioApp.cpp` | 678 | Lifecycle: window creation, `initialize`, `run`, `update`, `render`, `sync_scene_to_engine`, style, undo history, `handle_message` |
+| `StudioViewport.cpp` | 637 | Viewport panel, camera, picking, selection box, collider gizmos, light markers |
+| `StudioMaterials.cpp` | 504 | Material editor panel and its PBR sphere preview |
+| `StudioOutliner.cpp` | 494 | Scene hierarchy panel and every selection operation it drives |
+| `StudioAssets.cpp` | 481 | Asset browser, import, relink, drag-and-drop, auto-relink |
+| `StudioEnvironment.cpp` | 395 | Environment panel (Terrain / Lighting tabs and the asset tab host) |
+| `StudioInspector.cpp` | 379 | Object properties panel |
+| `StudioSceneFiles.cpp` | 365 | Open/save/new scene and project, export, PFM dialogs |
+| `StudioTerrain.cpp` | 273 | Terrain rebuild, layer sync, sculpt/paint brush |
+| `StudioAutomation.cpp` | 244 | Benchmarks, grass demo, screenshot capture, frame profiler |
+| `StudioChrome.cpp` | 215 | Menu bar, dockspace layout, status bar |
+| `StudioSimulation.cpp` | 179 | Jolt preview: body creation, stop, resting-state report |
+| `StudioShared.h` | - | `HelpTooltip`, `DrawVec3Control`, `to_utf8`, `path_utf8`, quaternion/matrix helpers |
+
+`StudioShared.h` exists because those helpers used to sit in an anonymous namespace inside the one file. They are now `inline` functions in `GM3D::Studio`, so the ~400 call sites did not change.
+
+### How it was done without changing behaviour
+
+The bodies were *moved*, never edited:
+
+1. A throwaway script parses top-level definitions (signature line to its matching closing brace at column 0) and writes them into a new file with a fixed include preamble. It never touches the text inside a body.
+2. One build after each tranche.
+3. Pixel comparison against the pre-split build: a `git worktree` of the previous commit was built separately, both binaries rendered the default scene and `tests/fixtures/meshcollider.json` at 1600x900 for 30 frames, and the PNGs were diffed with the `fps` readout masked (that is the only region that differs between two runs of the *same* build).
+
+Both tranches came out **bit-identical**: 0 changed pixels outside the fps box on both scenes. That is the check worth repeating after any follow-up move: it catches a dropped `ImGui::Begin`/`End` pair, a reordered draw call or a lost return value, which a compile cannot.
+
+### Conventions to keep it this way
+
+- A new panel or dialog goes into the file that matches its subject, not back into `StudioApp.cpp`. Adding a file means adding it to `STUDIO_SOURCES` in `CMakeLists.txt`.
+- Anything shared between panels goes into `StudioShared.h` (UI helpers) or into the object's own header (`SceneData.h`, `ProjectData.h`), never into the `.cpp`.
+- `StudioApp.h` keeps the class declaration; member functions can live in any of the translation units because they are all `StudioApp::` methods.
+- The include preamble of each new file is deliberately generous (ImGui, ImGuizmo, engine headers, Win32 dialog headers); trimming it is not worth the build breakage.
+
+### Build wrinkle worth remembering
+
+After a CMake edits, `build.bat` can fail with `ninja: error: manifest 'build.ninja' still dirty after 100 tries`. That means the build directory carries a cache from a different generator (in this session a stray `cmake -B build` had reconfigured it as "Visual Studio 18 2026" while `build.ninja` was left over from Ninja). The fix is to delete `build/` and let `tools\check.ps1` reconfigure with Ninja - do not try to patch the timestamps.

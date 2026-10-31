@@ -9,6 +9,8 @@ Run from PowerShell:
 
 The script configures and builds the local release build and runs CTest. `-Graphics` additionally compares a regional terrain texture update against a full rebuild on a Direct3D WARP device, then runs two Direct3D initialization, render and shutdown cycles using a hidden window. The latter requires a working Windows graphics driver. It does not copy the extension into a GameMaker project.
 
+If `build.bat` reports `ninja: error: manifest 'build.ninja' still dirty after 100 tries`, the build directory has a cache from a different generator (usually a stray `cmake -B build` that picked Visual Studio). Delete `build/` and run `tools\check.ps1` again; patching timestamps only hides it.
+
 Standalone checks after building:
 
 ```powershell
