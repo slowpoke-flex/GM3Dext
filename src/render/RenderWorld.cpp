@@ -1,4 +1,7 @@
 #include "RenderWorld.h"
+#include "BuiltinTextures.h"
+
+#include "FrustumMath.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -63,6 +66,16 @@ cbuffer MaterialConstants : register(b3) {
 Texture2D ShadowMap : register(t0);
 Texture2D AlbedoMap : register(t1);
 Texture2D NormalMap : register(t2);
+// Terrain surface detail (only sampled when Param.y == 5).
+Texture2D SplatMap : register(t3);
+Texture2D DetailGrass : register(t4);
+Texture2D DetailRock : register(t5);
+Texture2D DetailSand : register(t6);
+Texture2D DetailCobble : register(t7);
+Texture2D DetailGrassN : register(t8);
+Texture2D DetailRockN : register(t9);
+Texture2D DetailSandN : register(t10);
+Texture2D DetailCobbleN : register(t11);
 SamplerComparisonState ShadowSampler : register(s0);
 SamplerState TextureSampler : register(s1);
 
@@ -397,36 +410,100 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
     baseColor *= texColor.rgb;
     opacity *= texColor.a;
 
+    // Presets 7/8 bind a CC0 photograph; let it carry the colour instead of the flat tint.
+    if (MatPad.y > 0.5) {
+        baseColor = lerp(baseColor, texColor.rgb, 0.85);
+    }
+
     if (MatAlphaMode == 1 && opacity < MatAlphaCutoff) {
         discard;
     }
 
     // --------------------------------------------------------------------------------------------
-    // Procedural Detail Tiling & Surface Grain for Multi-Biome Terrain (Texture ID 5)
+    // Terrain surface detail. Four CC0 PBR sets are tiled in world space and blended by the
+    // splat weights baked in TerrainSystem::update_detail_splat. The baked 2048 albedo only
+    // carries biome colour (~8 texels/m), far too coarse to read as a surface, so it is
+    // demoted to a large-scale hue tint here (texture ID 5 only).
     // --------------------------------------------------------------------------------------------
     if ((int)input.Param.y == 5) {
-        float distToCam = length(input.WorldPos - CameraPos);
-        // Distance-fade: micro-detail active within 14m under player's feet, fades smoothly to 0 by 30m
-        float detailFade = saturate(1.0 - (distToCam - 14.0) / 16.0);
+        if (MatPad.x > 0.0) {
+            float4 splat = SplatMap.Sample(TextureSampler, input.UV);
+            float4 w = max(splat - 0.02, 0.0);
+            w /= max(dot(w, 1.0), 0.0001);
 
-        if (detailFade > 0.01) {
-            float2 microUV = input.WorldPos.xz * 0.65;
-            float d1 = sin(microUV.x * 6.283 + sin(microUV.y * 3.141)) * 0.5 + 0.5;
-            float d2 = cos(microUV.y * 7.539 - sin(microUV.x * 4.188)) * 0.5 + 0.5;
-            float microGrain = (d1 * 0.6 + d2 * 0.4);
+            float2 uvTop = input.WorldPos.xz * MatPad.x;
+            float topWeight = saturate(N.y * N.y);
 
-            baseColor *= lerp(1.0, 0.94 + 0.12 * microGrain, detailFade);
+            // Photographs are sRGB encoded; the pipeline works in linear space.
+            float3 gT = DetailGrass.Sample(TextureSampler, uvTop).rgb;
+            float3 rT = DetailRock.Sample(TextureSampler, uvTop).rgb;
+            float3 sT = DetailSand.Sample(TextureSampler, uvTop).rgb;
+            float3 cT = DetailCobble.Sample(TextureSampler, uvTop).rgb;
+            float3 albedoTop = gT * gT * w.x + rT * rT * w.y + sT * sT * w.z + cT * cT * w.w;
 
-            float3 dNorm = float3(
-                cos(microUV.x * 6.283) * 0.12,
-                1.0,
-                sin(microUV.y * 7.539) * 0.12
-            );
-            N = normalize(lerp(N, normalize(N + dNorm * 0.25), detailFade));
+            float3 normalTop = DetailGrassN.Sample(TextureSampler, uvTop).rgb * w.x
+                             + DetailRockN.Sample(TextureSampler, uvTop).rgb * w.y
+                             + DetailSandN.Sample(TextureSampler, uvTop).rgb * w.z
+                             + DetailCobbleN.Sample(TextureSampler, uvTop).rgb * w.w;
+
+            float3 detailAlbedo = albedoTop;
+            float3 detailNormal = normalTop;
+
+            // Steep faces smear a top-down projection, so fall back to a side projection.
+            // Flat ground never pays for it, which is the overwhelming majority of pixels.
+            if (topWeight < 0.80) {
+                float2 uvSide = (abs(N.x) > abs(N.z)) ? input.WorldPos.zy * MatPad.x
+                                                      : input.WorldPos.xy * MatPad.x;
+                float3 gS = DetailGrass.Sample(TextureSampler, uvSide).rgb;
+                float3 rS = DetailRock.Sample(TextureSampler, uvSide).rgb;
+                float3 sS = DetailSand.Sample(TextureSampler, uvSide).rgb;
+                float3 cS = DetailCobble.Sample(TextureSampler, uvSide).rgb;
+                float3 albedoSide = gS * gS * w.x + rS * rS * w.y + sS * sS * w.z + cS * cS * w.w;
+
+                float3 normalSide = DetailGrassN.Sample(TextureSampler, uvSide).rgb * w.x
+                                  + DetailRockN.Sample(TextureSampler, uvSide).rgb * w.y
+                                  + DetailSandN.Sample(TextureSampler, uvSide).rgb * w.z
+                                  + DetailCobbleN.Sample(TextureSampler, uvSide).rgb * w.w;
+
+                float sideBlend = smoothstep(0.80, 0.45, topWeight);
+                detailAlbedo = lerp(albedoTop, albedoSide, sideBlend);
+                detailNormal = lerp(normalTop, normalSide, sideBlend);
+            }
+
+            // Keep the biome hue, drop the biome brightness: the photograph owns the detail.
+            // The tint only follows the grass/sand layers, otherwise the stone plaza and the
+            // cliff faces pick up a green cast from the meadow palette.
+            float macroLum = max(dot(baseColor, float3(0.299, 0.587, 0.114)), 0.001);
+            float3 macroTint = lerp(float3(1.0, 1.0, 1.0), baseColor / macroLum, 0.55);
+            macroTint = lerp(float3(1.0, 1.0, 1.0), macroTint, saturate(w.x + 0.3 * w.z));
+            baseColor = detailAlbedo * macroTint;
+
+            // Tangent basis of the XZ projection: the map's X follows world X, its Y follows Z.
+            float3 dn = detailNormal * 2.0 - 1.0;
+            N = normalize(N + float3(dn.x, 0.0, dn.y) * 0.85);
+        } else {
+            // No assets on disk: keep the original procedural micro-grain.
+            float distToCam = length(input.WorldPos - CameraPos);
+            float detailFade = saturate(1.0 - (distToCam - 14.0) / 16.0);
+            if (detailFade > 0.01) {
+                float2 microUV = input.WorldPos.xz * 0.65;
+                float d1 = sin(microUV.x * 6.283 + sin(microUV.y * 3.141)) * 0.5 + 0.5;
+                float d2 = cos(microUV.y * 7.539 - sin(microUV.x * 4.188)) * 0.5 + 0.5;
+                float microGrain = (d1 * 0.6 + d2 * 0.4);
+
+                baseColor *= lerp(1.0, 0.94 + 0.12 * microGrain, detailFade);
+
+                float3 dNorm = float3(
+                    cos(microUV.x * 6.283) * 0.12,
+                    1.0,
+                    sin(microUV.y * 7.539) * 0.12
+                );
+                N = normalize(lerp(N, normalize(N + dNorm * 0.25), detailFade));
+            }
         }
 
         // Natural dielectric mineral terrain PBR response (matte soil, scree and bedrock)
-        roughness = 0.82;
+        roughness = 0.85;
         metallic = 0.01;
     }
 
@@ -549,16 +626,25 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
         }
     }
 
-    // Two-Tone Hemispheric Skylight with Earth/Grass Bounce
+    // Two-Tone Hemispheric Skylight with Earth/Grass Bounce.
+    // Kept close to neutral: the old sky term peaked at 1.35 in blue on top of an
+    // already blue ambient, which desaturated every albedo into pastel grey.
     float hemi = N.y * 0.5 + 0.5;
-    float3 groundBounce = float3(0.32, 0.28, 0.22);
-    float3 skyLight = lerp(groundBounce, float3(0.75, 0.95, 1.35), hemi);
+    float3 groundBounce = float3(0.30, 0.27, 0.23);
+    float3 skyLight = lerp(groundBounce, float3(0.66, 0.78, 1.00), hemi);
 
     // Radiant Ambient Sky Fill (Ensures shadows remain luminous, colorful, and detailed without black voids)
     float3 ambientSky = AmbientColor * skyLight;
     float3 ambient = ambientSky * baseColor * (1.0 - metallic);
 
-    float3 color = directLight + pointLightAccum + ambient;
+    // Conductor fill light. There is no environment probe, so a metal (metallic ~= 1) has no
+    // diffuse and only shows the sun's specular lobe, which reads as a black box. Fake the
+    // sky reflection with a dedicated hemisphere probe: bright enough to give gold and steel
+    // a visible sheen, independent of the deliberately dim ambient term.
+    float3 envProbe = lerp(float3(0.30, 0.26, 0.21), float3(0.52, 0.66, 0.92), hemi);
+    float3 envSpecular = envProbe * F0 * (1.0 - roughness) * 2.0;
+
+    float3 color = directLight + pointLightAccum + ambient + envSpecular * metallic;
 
     // Atmospheric Distance & Height Fog (Lowland Valley Mist with Crisp Mountain Peaks)
     float distToCam = length(input.WorldPos - CameraPos);
@@ -776,14 +862,15 @@ float4 PS_Composite(VS_PostOut input) : SV_Target {
     // Shadow detail protection: lift crushed toe values so environmental indirect light remains readable
     // ACES already compresses highlights into the display range.
 
-    // Vibrance / Saturation Boost (Juicy natural greens, azures, and golden sunlight)
+    // Vibrance / Saturation Boost. Photographic albedo already carries real saturation,
+    // so this is now a gentle grade instead of the +18% that produced neon grass.
     float luma = dot(mapped, float3(0.2126f, 0.7152f, 0.0722f));
-    float satBoost = 1.18f;
+    float satBoost = 1.05f;
     mapped = lerp(float3(luma, luma, luma), mapped, satBoost);
 
-    // Warm Sun Highlights & Luminous Blue Shadow Skylight Tint
-    float3 shadowTint = float3(1.04f, 1.06f, 1.14f);
-    float3 highlightTint = float3(1.02f, 1.01f, 0.96f);
+    // Warm Sun Highlights & a very light cool tint in the shadows
+    float3 shadowTint = float3(1.01f, 1.02f, 1.05f);
+    float3 highlightTint = float3(1.02f, 1.01f, 0.97f);
     mapped *= lerp(shadowTint, highlightTint, saturate(luma));
 
     // 3. Subtle Optical Vignette (Cinematic depth & framing)
@@ -1312,12 +1399,35 @@ bool RenderWorld::init_shadow_resources() {
 bool RenderWorld::init_instance_buffer() {
     D3D11_BUFFER_DESC ibd{};
     ibd.Usage = D3D11_USAGE_DYNAMIC;
-    ibd.ByteWidth = static_cast<UINT>(sizeof(InstanceDataGPU) * m_max_instances);
+    ibd.ByteWidth = static_cast<UINT>(sizeof(InstanceDataGPU) * kInstanceArenaCapacity);
     ibd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
     ibd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
     HRESULT hr = m_device->CreateBuffer(&ibd, nullptr, m_instance_buffer.GetAddressOf());
     return SUCCEEDED(hr);
+}
+
+InstanceDataGPU* RenderWorld::begin_instance_write(uint32_t count, uint32_t& out_offset) {
+    if (!m_instance_buffer || count == 0) return nullptr;
+    if (count > kInstanceArenaCapacity) return nullptr;
+
+    if (m_instance_cursor + count > kInstanceArenaCapacity) {
+        m_instance_cursor = 0;
+        m_instance_discard_pending = true;
+    }
+
+    const D3D11_MAP mode = m_instance_discard_pending ? D3D11_MAP_WRITE_DISCARD : D3D11_MAP_WRITE_NO_OVERWRITE;
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(m_context->Map(m_instance_buffer.Get(), 0, mode, 0, &mapped))) return nullptr;
+    m_instance_discard_pending = false;
+
+    out_offset = m_instance_cursor;
+    m_instance_cursor += count;
+    return static_cast<InstanceDataGPU*>(mapped.pData) + out_offset;
+}
+
+void RenderWorld::end_instance_write() {
+    m_context->Unmap(m_instance_buffer.Get(), 0);
 }
 
 void RenderWorld::resize(uint32_t width, uint32_t height) {
@@ -1545,8 +1655,11 @@ void RenderWorld::update_view_proj(const SharedBufferHeader& header) {
     }
 }
 
+
 void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEntityData* entities, uint32_t count, float delta_time) {
     if (!m_initialized || !m_swap_chain) return;
+    m_instance_cursor = 0;
+    m_instance_discard_pending = true;
     m_total_time += delta_time;
     m_particle_manager.update(delta_time);
 
@@ -1575,6 +1688,9 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
     struct RenderItem {
         InstanceDataGPU inst;
         uint32_t entity_id;
+        float bounds_min[3];  // world-space AABB, used by every culling test below
+        float bounds_max[3];
+        float depth;          // squared distance to the camera, used to sort blended batches
     };
     struct BatchKey {
         uint16_t mesh_id;
@@ -1594,31 +1710,106 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
     std::unordered_map<uint16_t, std::vector<RenderItem>> shadow_batches;
 
     if (entities != nullptr && count > 0) {
+        const GM3D::FrustumPlanes camera_frustum = GM3D::extract_frustum_planes(m_cached_scene_cb.view_proj);
+        const float cam_x = m_cached_scene_cb.camera_pos[0];
+        const float cam_y = m_cached_scene_cb.camera_pos[1];
+        const float cam_z = m_cached_scene_cb.camera_pos[2];
+
         for (uint32_t i = 0; i < count; ++i) {
             const auto& e = entities[i];
-            if (e.flags & EntityFlags::ACTIVE) {
-                InstanceDataGPU inst{};
-                inst.px = e.px; inst.py = e.py; inst.pz = e.pz;
-                inst.qx = e.qx; inst.qy = e.qy; inst.qz = e.qz; inst.qw = e.qw;
-                inst.sx = e.sx; inst.sy = e.sy; inst.sz = e.sz;
-                inst.param1 = e.custom_param1;
-                inst.param2 = e.custom_param2;
+            if (!(e.flags & EntityFlags::ACTIVE)) continue;
 
-                RenderItem item{ inst, e.entity_id };
-                uint16_t mat_id = e.material_id;
-                uint16_t tex_id = static_cast<uint16_t>(e.custom_param2);
-                BatchKey key{ e.mesh_id, mat_id, tex_id };
+            const GPUMesh* mesh = m_mesh_manager.get_mesh(e.mesh_id);
+            if (!mesh) continue;
+
+            RenderItem item{};
+            item.entity_id = e.entity_id;
+            item.inst.px = e.px; item.inst.py = e.py; item.inst.pz = e.pz;
+            item.inst.qx = e.qx; item.inst.qy = e.qy; item.inst.qz = e.qz; item.inst.qw = e.qw;
+            item.inst.sx = e.sx; item.inst.sy = e.sy; item.inst.sz = e.sz;
+            item.inst.param1 = e.custom_param1;
+            item.inst.param2 = e.custom_param2;
+
+            const float position[3] = { e.px, e.py, e.pz };
+            const float rotation[4] = { e.qx, e.qy, e.qz, e.qw };
+            const float scale[3] = { e.sx, e.sy, e.sz };
+            GM3D::transform_aabb(position, rotation, scale,
+                           mesh->bounds_min, mesh->bounds_max,
+                           item.bounds_min, item.bounds_max);
+
+            const float cx = (item.bounds_min[0] + item.bounds_max[0]) * 0.5f - cam_x;
+            const float cy = (item.bounds_min[1] + item.bounds_max[1]) * 0.5f - cam_y;
+            const float cz = (item.bounds_min[2] + item.bounds_max[2]) * 0.5f - cam_z;
+            item.depth = cx * cx + cy * cy + cz * cz;
+
+            const uint16_t tex_id = static_cast<uint16_t>(e.custom_param2);
+            if (GM3D::aabb_inside_frustum(camera_frustum, item.bounds_min, item.bounds_max)) {
+                BatchKey key{ e.mesh_id, e.material_id, tex_id };
                 batches[key].push_back(item);
+            }
 
-                // Any visible mesh can cast shadows when requested.
-                if (e.flags & EntityFlags::CAST_SHADOW) {
-                    shadow_batches[e.mesh_id].push_back(item);
-                }
+            // Shadow casters are culled per light view later, not against the camera.
+            if (e.flags & EntityFlags::CAST_SHADOW) {
+                shadow_batches[e.mesh_id].push_back(item);
             }
         }
     }
 
-    auto draw_batch_items = [&](const std::vector<RenderItem>& items, uint16_t mesh_id, uint16_t material_id, uint16_t texture_id) {
+    std::unordered_map<uint32_t, std::vector<DirectX::XMFLOAT4X4>> pose_cache;
+    bool bones_hold_identity = false;
+
+    // Upload an identity pose once; skinned draws invalidate it.
+    auto upload_identity_bones = [&]() {
+        D3D11_MAPPED_SUBRESOURCE mappedBones{};
+        if (SUCCEEDED(m_context->Map(m_bone_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedBones))) {
+            static std::vector<DirectX::XMFLOAT4X4> s_default_bones;
+            if (s_default_bones.empty()) {
+                s_default_bones.resize(128);
+                for (int b = 0; b < 128; ++b) {
+                    DirectX::XMStoreFloat4x4(&s_default_bones[b], DirectX::XMMatrixIdentity());
+                }
+            }
+            memcpy(mappedBones.pData, s_default_bones.data(), sizeof(DirectX::XMFLOAT4X4) * 128);
+            m_context->Unmap(m_bone_constant_buffer.Get(), 0);
+        }
+        bones_hold_identity = true;
+    };
+
+    // Returns the cached pose for an entity, evaluating it at most once per frame.
+    auto get_pose = [&](const GM3D::SkinnedModelData* skinned_model, uint32_t entity_id) -> const std::vector<DirectX::XMFLOAT4X4>* {
+        auto pose_it = pose_cache.find(entity_id);
+        if (pose_it != pose_cache.end()) return &pose_it->second;
+
+        std::vector<DirectX::XMFLOAT4X4> bone_matrices;
+        const GM3D::AnimationClip* clip = nullptr;
+        float anim_time = 0.0f;
+        bool anim_loop = true;
+
+        auto anim_it = m_entity_anims.find(entity_id);
+        if (anim_it != m_entity_anims.end() && anim_it->second.anim_index >= 0) {
+            clip = skinned_model->get_clip(static_cast<uint32_t>(anim_it->second.anim_index));
+            anim_time = anim_it->second.current_time;
+            anim_loop = anim_it->second.loop;
+        }
+
+        skinned_model->skeleton.evaluate_pose(clip, anim_time, bone_matrices, anim_loop);
+        pose_it = pose_cache.emplace(entity_id, std::move(bone_matrices)).first;
+        return &pose_it->second;
+    };
+
+    auto upload_bones = [&](const GM3D::SkinnedModelData* skinned_model, uint32_t entity_id) {
+        const std::vector<DirectX::XMFLOAT4X4>* bones = get_pose(skinned_model, entity_id);
+        D3D11_MAPPED_SUBRESOURCE mappedBones{};
+        if (SUCCEEDED(m_context->Map(m_bone_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedBones))) {
+            const size_t copy_bones = std::min(bones->size(), static_cast<size_t>(128));
+            memcpy(mappedBones.pData, bones->data(), sizeof(DirectX::XMFLOAT4X4) * copy_bones);
+            m_context->Unmap(m_bone_constant_buffer.Get(), 0);
+        }
+        bones_hold_identity = false;
+    };
+
+    auto draw_batch_items = [&](const std::vector<RenderItem>& items, uint16_t mesh_id, uint16_t material_id,
+                               uint16_t texture_id, bool depth_only = false) {
         if (items.empty()) return;
         const GPUMesh* mesh = m_mesh_manager.get_mesh(mesh_id);
         if (!mesh) return;
@@ -1627,6 +1818,7 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
         uint16_t albedo_id = texture_id;
         uint16_t normal_id = 0;
 
+        if (!depth_only) {
         auto it = m_materials.find(material_id);
         if (it != m_materials.end()) {
             matProps = it->second;
@@ -1642,6 +1834,26 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
                 matProps.preset_id = static_cast<int32_t>(material_id);
             } else {
                 matProps.preset_id = 0;
+            }
+        }
+
+        // Terrain: enable the world-space detail blend only when the splat map exists and
+        // all four CC0 sets were loaded. Otherwise the shader falls back to the old
+        // procedural grain, so a build without assets/ still looks intentional.
+        if (albedo_id == GM3D::TexId::TERRAIN && m_terrain_system.has_detail_splat() &&
+            m_texture_manager.has_texture(GM3D::TexId::GRASS) && m_texture_manager.has_texture(GM3D::TexId::ROCK) &&
+            m_texture_manager.has_texture(GM3D::TexId::SAND) && m_texture_manager.has_texture(GM3D::TexId::COBBLE)) {
+            matProps.pad[0] = 0.40f; // ~2.5 m per detail tile
+        }
+
+        // Presets get real photographs for their dominant surface.
+        if (albedo_id == 0) {
+            if (matProps.preset_id == 8 && m_texture_manager.has_texture(GM3D::TexId::ROCK)) {
+                albedo_id = GM3D::TexId::ROCK;
+                matProps.pad[1] = 1.0f;
+            } else if (matProps.preset_id == 7 && m_texture_manager.has_texture(GM3D::TexId::METAL)) {
+                albedo_id = GM3D::TexId::METAL;
+                matProps.pad[1] = 1.0f;
             }
         }
 
@@ -1667,6 +1879,7 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
         } else {
             m_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
         }
+        } // !depth_only
 
         if (mesh->is_skinned) {
             const GM3D::SkinnedModelData* skinned_model = m_mesh_manager.get_skinned_model(mesh_id);
@@ -1679,66 +1892,102 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
             m_context->IASetIndexBuffer(mesh->index_buffer.Get(), DXGI_FORMAT_R32_UINT, 0);
 
             for (const auto& item : items) {
-                std::vector<DirectX::XMFLOAT4X4> bone_matrices;
-                const GM3D::AnimationClip* clip = nullptr;
-                float anim_time = 0.0f;
-                bool anim_loop = true;
+                upload_bones(skinned_model, item.entity_id);
 
-                auto it = m_entity_anims.find(item.entity_id);
-                if (it != m_entity_anims.end() && it->second.anim_index >= 0) {
-                    clip = skinned_model->get_clip(static_cast<uint32_t>(it->second.anim_index));
-                    anim_time = it->second.current_time;
-                    anim_loop = it->second.loop;
-                }
+                UINT instance_offset = 0;
+                InstanceDataGPU* dst = begin_instance_write(1, instance_offset);
+                if (!dst) return;
+                *dst = item.inst;
+                end_instance_write();
 
-                skinned_model->skeleton.evaluate_pose(clip, anim_time, bone_matrices, anim_loop);
-
-                D3D11_MAPPED_SUBRESOURCE mappedBones{};
-                if (SUCCEEDED(m_context->Map(m_bone_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedBones))) {
-                    size_t copy_bones = std::min(bone_matrices.size(), (size_t)128);
-                    memcpy(mappedBones.pData, bone_matrices.data(), sizeof(DirectX::XMFLOAT4X4) * copy_bones);
-                    m_context->Unmap(m_bone_constant_buffer.Get(), 0);
-                }
-
-                D3D11_MAPPED_SUBRESOURCE mappedInst{};
-                if (SUCCEEDED(m_context->Map(m_instance_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedInst))) {
-                    memcpy(mappedInst.pData, &item.inst, sizeof(InstanceDataGPU));
-                    m_context->Unmap(m_instance_buffer.Get(), 0);
-                }
+                ID3D11Buffer* skin_vbs[] = { mesh->vertex_buffer.Get(), m_instance_buffer.Get() };
+                UINT skin_strides[] = { sizeof(Vertex3D), sizeof(InstanceDataGPU) };
+                UINT skin_offsets[] = { 0, instance_offset * static_cast<UINT>(sizeof(InstanceDataGPU)) };
+                m_context->IASetVertexBuffers(0, 2, skin_vbs, skin_strides, skin_offsets);
+                m_context->IASetIndexBuffer(mesh->index_buffer.Get(), DXGI_FORMAT_R32_UINT, 0);
 
                 m_context->DrawIndexedInstanced(mesh->index_count, 1, 0, 0, 0);
             }
         } else {
-            // Rigid Mesh (batch instanced rendering)
-            D3D11_MAPPED_SUBRESOURCE mappedBones{};
-            if (SUCCEEDED(m_context->Map(m_bone_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedBones))) {
-                static std::vector<DirectX::XMFLOAT4X4> s_default_bones;
-                if (s_default_bones.empty()) {
-                    s_default_bones.resize(128);
-                    for (int b = 0; b < 128; ++b) {
-                        DirectX::XMStoreFloat4x4(&s_default_bones[b], DirectX::XMMatrixIdentity());
-                    }
+            // Rigid Mesh (batch instanced rendering). The identity pose only has to be
+            // uploaded once until a skinned draw overwrites the bone buffer.
+            if (!bones_hold_identity) upload_identity_bones();
+
+            const UINT copy_count = std::min(static_cast<UINT>(items.size()), m_max_instances);
+            UINT instance_offset = 0;
+            InstanceDataGPU* dst = begin_instance_write(copy_count, instance_offset);
+            if (!dst) return;
+            for (UINT k = 0; k < copy_count; ++k) dst[k] = items[k].inst;
+            end_instance_write();
+
+            ID3D11Buffer* vbs[] = { mesh->vertex_buffer.Get(), m_instance_buffer.Get() };
+            UINT strides[] = { sizeof(Vertex3D), sizeof(InstanceDataGPU) };
+            UINT offsets[] = { 0, instance_offset * static_cast<UINT>(sizeof(InstanceDataGPU)) };
+            m_context->IASetVertexBuffers(0, 2, vbs, strides, offsets);
+            m_context->IASetIndexBuffer(mesh->index_buffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+
+            m_context->DrawIndexedInstanced(mesh->index_count, copy_count, 0, 0, 0);
+        }
+    };
+
+    // Shadow casters are culled against each light view instead of redrawing the
+    // whole scene, and each view uploads its instances once instead of once per
+    // batch: with two cascades and four point lights that turns up to 26 full-scene
+    // passes plus ~300 dynamic-buffer renames into 26 culled views and 26 uploads.
+    std::vector<RenderItem> shadow_upload;
+    struct ShadowRange { uint16_t mesh_id; UINT first; UINT count; };
+    std::vector<ShadowRange> shadow_ranges;
+
+    auto draw_shadow_view = [&](const float* light_view_proj) {
+        const GM3D::FrustumPlanes light_frustum = GM3D::extract_frustum_planes(light_view_proj);
+
+        shadow_upload.clear();
+        shadow_ranges.clear();
+        for (const auto& [mesh_id, inst_list] : shadow_batches) {
+            const UINT first = static_cast<UINT>(shadow_upload.size());
+            for (const auto& item : inst_list) {
+                if (GM3D::aabb_inside_frustum(light_frustum, item.bounds_min, item.bounds_max)) {
+                    shadow_upload.push_back(item);
                 }
-                memcpy(mappedBones.pData, s_default_bones.data(), sizeof(DirectX::XMFLOAT4X4) * 128);
-                m_context->Unmap(m_bone_constant_buffer.Get(), 0);
             }
+            const UINT count = static_cast<UINT>(shadow_upload.size()) - first;
+            if (count > 0) shadow_ranges.push_back(ShadowRange{ mesh_id, first, count });
+        }
+        if (shadow_ranges.empty()) return;
 
-            D3D11_MAPPED_SUBRESOURCE mapped{};
-            if (SUCCEEDED(m_context->Map(m_instance_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-                UINT copy_count = std::min(static_cast<UINT>(items.size()), m_max_instances);
-                auto* pData = static_cast<InstanceDataGPU*>(mapped.pData);
-                for (UINT k = 0; k < copy_count; ++k) {
-                    pData[k] = items[k].inst;
+        const UINT upload_count = std::min(static_cast<UINT>(shadow_upload.size()), m_max_instances);
+        UINT upload_offset = 0;
+        InstanceDataGPU* pData = begin_instance_write(upload_count, upload_offset);
+        if (!pData) return;
+        for (UINT k = 0; k < upload_count; ++k) pData[k] = shadow_upload[k].inst;
+        end_instance_write();
+
+        for (const auto& range : shadow_ranges) {
+            if (range.first >= upload_count) break;
+            const UINT count = std::min(range.count, upload_count - range.first);
+            const GPUMesh* mesh = m_mesh_manager.get_mesh(range.mesh_id);
+            if (!mesh) continue;
+
+            if (mesh->is_skinned) {
+                const GM3D::SkinnedModelData* skinned_model = m_mesh_manager.get_skinned_model(range.mesh_id);
+                if (!skinned_model) continue;
+                for (UINT i = 0; i < count; ++i) {
+                    upload_bones(skinned_model, shadow_upload[range.first + i].entity_id);
+                    ID3D11Buffer* skin_vbs[] = { mesh->vertex_buffer.Get(), m_instance_buffer.Get() };
+                    UINT skin_strides[] = { sizeof(Vertex3D), sizeof(InstanceDataGPU) };
+                    UINT skin_offsets[] = { 0, (upload_offset + range.first + i) * static_cast<UINT>(sizeof(InstanceDataGPU)) };
+                    m_context->IASetVertexBuffers(0, 2, skin_vbs, skin_strides, skin_offsets);
+                    m_context->IASetIndexBuffer(mesh->index_buffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+                    m_context->DrawIndexedInstanced(mesh->index_count, 1, 0, 0, 0);
                 }
-                m_context->Unmap(m_instance_buffer.Get(), 0);
-
+            } else {
+                if (!bones_hold_identity) upload_identity_bones();
                 ID3D11Buffer* vbs[] = { mesh->vertex_buffer.Get(), m_instance_buffer.Get() };
                 UINT strides[] = { sizeof(Vertex3D), sizeof(InstanceDataGPU) };
-                UINT offsets[] = { 0, 0 };
+                UINT offsets[] = { 0, (upload_offset + range.first) * static_cast<UINT>(sizeof(InstanceDataGPU)) };
                 m_context->IASetVertexBuffers(0, 2, vbs, strides, offsets);
                 m_context->IASetIndexBuffer(mesh->index_buffer.Get(), DXGI_FORMAT_R32_UINT, 0);
-
-                m_context->DrawIndexedInstanced(mesh->index_count, copy_count, 0, 0, 0);
+                m_context->DrawIndexedInstanced(mesh->index_count, count, 0, 0, 0);
             }
         }
     };
@@ -1786,9 +2035,7 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
         vp0.MinDepth = 0.0f;
         vp0.MaxDepth = 1.0f;
         m_context->RSSetViewports(1, &vp0);
-        for (const auto& [mesh_id, inst_list] : shadow_batches) {
-            draw_batch_items(inst_list, mesh_id, 0, 0);
-        }
+        draw_shadow_view(m_cached_scene_cb.light_view_proj);
 
         // 1b. Sun Cascade 1 (Top-Right Quadrant)
         bool mutated_cb = false;
@@ -1810,10 +2057,7 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
             vp1.MinDepth = 0.0f;
             vp1.MaxDepth = 1.0f;
             m_context->RSSetViewports(1, &vp1);
-            for (const auto& [mesh_id, inst_list] : shadow_batches) {
-                draw_batch_items(inst_list, mesh_id, 0, 0);
-            }
-        }
+            draw_shadow_view(cb1.light_view_proj);        }
 
         // 1c. Point Light Omnidirectional 6-Face Tiles (Bottom Half: 4 slots x 6 faces)
         if (next_shadow_slot > 0) {
@@ -1879,9 +2123,7 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
                     vpFace.MaxDepth = 1.0f;
                     m_context->RSSetViewports(1, &vpFace);
 
-                    for (const auto& [mesh_id, inst_list] : shadow_batches) {
-                        draw_batch_items(inst_list, mesh_id, 0, 0);
-                    }
+                    draw_shadow_view(cbFace.light_view_proj);
                 }
             }
         }
@@ -1942,8 +2184,56 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
     ID3D11SamplerState* samplers[] = { m_shadow_sampler.Get(), m_texture_manager.get_sampler() };
     m_context->PSSetSamplers(0, 2, samplers);
 
-    for (const auto& [key, inst_list] : batches) {
-        draw_batch_items(inst_list, key.mesh_id, key.material_id, key.texture_id);
+    // Terrain detail blend: splat weights at t3, four albedo sets at t4..t7 and their
+    // normal maps at t8..t11. Bound as one contiguous block; only the terrain shader
+    // path reads them.
+    {
+        const uint16_t detail_ids[4] = { GM3D::TexId::GRASS, GM3D::TexId::ROCK, GM3D::TexId::SAND, GM3D::TexId::COBBLE };
+        ID3D11ShaderResourceView* detail_srvs[9] = {
+            m_terrain_system.get_detail_splat_srv(),
+            m_texture_manager.get_srv(detail_ids[0]),
+            m_texture_manager.get_srv(detail_ids[1]),
+            m_texture_manager.get_srv(detail_ids[2]),
+            m_texture_manager.get_srv(detail_ids[3]),
+            m_texture_manager.get_normal_srv(detail_ids[0]),
+            m_texture_manager.get_normal_srv(detail_ids[1]),
+            m_texture_manager.get_normal_srv(detail_ids[2]),
+            m_texture_manager.get_normal_srv(detail_ids[3]),
+        };
+        m_context->PSSetShaderResources(3, 9, detail_srvs);
+    }
+
+    // Opaque geometry first, then blended batches far-to-near so overlapping
+    // transparent surfaces composite in a deterministic order.
+    struct BlendedBatch {
+        BatchKey key;
+        std::vector<RenderItem>* items;
+        float depth;
+    };
+    std::vector<BlendedBatch> blended_batches;
+
+    for (auto& [key, inst_list] : batches) {
+        auto mat_it = m_materials.find(key.material_id);
+        const bool blended = mat_it != m_materials.end() && mat_it->second.alpha_mode == 2;
+        if (!blended) {
+            draw_batch_items(inst_list, key.mesh_id, key.material_id, key.texture_id);
+            continue;
+        }
+        float batch_depth = 0.0f;
+        for (const auto& item : inst_list) {
+            if (item.depth > batch_depth) batch_depth = item.depth;
+        }
+        blended_batches.push_back(BlendedBatch{ key, &inst_list, batch_depth });
+    }
+
+    if (!blended_batches.empty()) {
+        std::sort(blended_batches.begin(), blended_batches.end(),
+                  [](const BlendedBatch& a, const BlendedBatch& b) { return a.depth > b.depth; });
+        for (auto& batch : blended_batches) {
+            std::sort(batch.items->begin(), batch.items->end(),
+                      [](const RenderItem& a, const RenderItem& b) { return a.depth > b.depth; });
+            draw_batch_items(*batch.items, batch.key.mesh_id, batch.key.material_id, batch.key.texture_id);
+        }
     }
 
     // Render Procedural Grass & Foliage System

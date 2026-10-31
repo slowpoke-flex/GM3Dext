@@ -22,6 +22,10 @@ foreach ($toolPath in @($vcvarsPath, $cmakePath, $ctestPath, $ninjaPath)) {
 $command = 'call "{0}" x64 >nul && "{1}" -S "{2}" -B "{3}" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="{4}" && "{1}" --build "{3}" && "{5}" --test-dir "{3}" --output-on-failure' -f $vcvarsPath, $cmakePath, $projectRoot, $BuildDirectory, $ninjaPath, $ctestPath
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# The GML SDK ships as two copies (3DTEST and gml_example); fail when they drift.
+& (Join-Path $PSScriptRoot 'sync_gml_sdk.ps1') -Check
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($Graphics) {
     $terrainBuild = 'call "{0}" x64 >nul && "{1}" --build "{2}" --target GM3DTerrainCheck' -f $vcvarsPath, $cmakePath, $BuildDirectory
     & $env:ComSpec /d /s /c $terrainBuild

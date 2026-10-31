@@ -1,6 +1,8 @@
 #include "TextureManager.h"
+#include "BuiltinTextures.h"
 #include <windows.h>
 #include <wincodec.h>
+#include <filesystem>
 #include <cmath>
 #include <algorithm>
 #include <iostream>
@@ -44,6 +46,12 @@ bool TextureManager::init(ID3D11Device* device, ID3D11DeviceContext* context) {
 
     // 3. Generate Built-in Procedural Textures (IDs 0..4)
     create_procedural_textures(device, context);
+
+    // 4. Upgrade the shaded materials to real CC0 PBR sets when assets are available.
+    const uint32_t sets = load_builtin_texture_sets(device, context);
+    if (sets == 0) {
+        std::cout << "[TextureManager] assets/textures not found, using procedural textures only.\n";
+    }
 
     return true;
 }
@@ -607,6 +615,152 @@ uint16_t TextureManager::load_texture_from_memory(ID3D11Device* device, ID3D11De
         m_textures[id].normal_srv = CreateNormalMapSRV(device, context, w, h, norm.data());
     }
     return id;
+}
+
+namespace {
+
+// Decodes any WIC-supported image (PNG/JPG/BMP/TGA-via-WIC) into tightly packed RGBA8.
+bool decode_image_rgba(const std::string& path, uint32_t& out_w, uint32_t& out_h,
+                       std::vector<uint8_t>& out_rgba) {
+    out_w = out_h = 0;
+    out_rgba.clear();
+
+    IWICImagingFactory* factory = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (FAILED(hr) || !factory) {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+        if (FAILED(hr) || !factory) return false;
+    }
+
+    const int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    if (wlen <= 0) { factory->Release(); return false; }
+    std::wstring wpath(static_cast<size_t>(wlen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wlen);
+
+    IWICBitmapDecoder* decoder = nullptr;
+    hr = factory->CreateDecoderFromFilename(wpath.c_str(), nullptr, GENERIC_READ,
+                                            WICDecodeMetadataCacheOnDemand, &decoder);
+    if (FAILED(hr) || !decoder) { factory->Release(); return false; }
+
+    IWICBitmapFrameDecode* frame = nullptr;
+    hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr) || !frame) { decoder->Release(); factory->Release(); return false; }
+
+    IWICFormatConverter* converter = nullptr;
+    hr = factory->CreateFormatConverter(&converter);
+    if (FAILED(hr) || !converter) {
+        frame->Release(); decoder->Release(); factory->Release(); return false;
+    }
+
+    hr = converter->Initialize(frame, GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone,
+                               nullptr, 0.0, WICBitmapPaletteTypeCustom);
+    if (SUCCEEDED(hr)) {
+        UINT w = 0, h = 0;
+        converter->GetSize(&w, &h);
+        if (w > 0 && h > 0) {
+            out_rgba.resize(static_cast<size_t>(w) * h * 4);
+            hr = converter->CopyPixels(nullptr, w * 4, static_cast<UINT>(out_rgba.size()), out_rgba.data());
+            if (SUCCEEDED(hr)) { out_w = w; out_h = h; }
+        } else {
+            hr = E_FAIL;
+        }
+    }
+
+    converter->Release();
+    frame->Release();
+    decoder->Release();
+    factory->Release();
+    return SUCCEEDED(hr) && out_w > 0 && out_h > 0;
+}
+
+} // namespace
+
+std::string TextureManager::find_asset_dir() {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> roots;
+
+    // 1. Explicit override wins, so a game can point at its own texture folder.
+    //    Accepts either the texture folder itself or a root that contains assets/textures.
+    char env_buffer[MAX_PATH] = {};
+    const DWORD env_len = GetEnvironmentVariableA("GM3D_ASSET_DIR", env_buffer, MAX_PATH);
+    if (env_len > 0 && env_len < MAX_PATH) {
+        const fs::path env_path = fs::u8path(env_buffer);
+        std::error_code env_ec;
+        if (fs::exists(env_path / "Grass001", env_ec)) return env_path.string();
+        roots.push_back(env_path);
+    }
+
+    // 2. Next to the executable, next to the working directory, then two levels up
+    //    (build/ -> repository root, which is where a dev build keeps assets/).
+    char module_path[MAX_PATH] = {};
+    if (GetModuleFileNameA(nullptr, module_path, MAX_PATH) > 0) {
+        const fs::path exe_dir = fs::u8path(module_path).parent_path();
+        roots.push_back(exe_dir);
+        roots.push_back(exe_dir / "..");
+        roots.push_back(exe_dir / ".." / "..");
+    }
+    std::error_code ec;
+    const fs::path cwd = fs::current_path(ec);
+    if (!ec) roots.push_back(cwd);
+
+    for (const fs::path& root : roots) {
+        for (const char* leaf : { "assets/textures", "textures", "assets" }) {
+            const fs::path candidate = root / fs::u8path(leaf);
+            std::error_code exists_ec;
+            if (fs::exists(candidate / "Grass001", exists_ec)) {
+                return candidate.string();
+            }
+        }
+    }
+    return {};
+}
+
+uint32_t TextureManager::load_builtin_texture_sets(ID3D11Device* device, ID3D11DeviceContext* context) {
+    if (!device || !context) return 0;
+    const std::string dir = find_asset_dir();
+    if (dir.empty()) return 0;
+
+    struct SetDesc {
+        uint16_t id;
+        const char* folder;
+        const char* label;
+    };
+    static const SetDesc kSets[] = {
+        { GM3D::TexId::GRASS,  "Ground037",       "CC0_MeadowSoil" },
+        { GM3D::TexId::ROCK,   "Rock030",         "CC0_Rock"       },
+        { GM3D::TexId::SAND,   "Ground080",       "CC0_Sand"       },
+        { GM3D::TexId::COBBLE, "PavingStones131", "CC0_Cobble"     },
+        { GM3D::TexId::WOOD,   "Wood066",         "CC0_Wood"       },
+        { GM3D::TexId::METAL,  "Metal032",        "CC0_Metal"      },
+        { GM3D::TexId::TURF,   "Grass001",        "CC0_Turf"       },
+    };
+
+    uint32_t loaded = 0;
+    for (const SetDesc& set : kSets) {
+        const std::string base = dir + "\\" + set.folder + "\\" + set.folder;
+        uint32_t w = 0, h = 0;
+        std::vector<uint8_t> albedo;
+        if (!decode_image_rgba(base + "_Color.jpg", w, h, albedo)) continue;
+        if (!set_texture_rgba(set.id, device, context, w, h, albedo.data(), set.label, true)) continue;
+
+        std::vector<uint8_t> normal;
+        uint32_t nw = 0, nh = 0;
+        if (decode_image_rgba(base + "_Normal.png", nw, nh, normal)) {
+            set_normal_map(set.id, device, context, nw, nh, normal.data());
+        } else {
+            // No authored normal map: derive a usable one from the albedo instead of
+            // dropping to the flat normal, which would flatten the material.
+            std::vector<uint8_t> generated = GenerateSobelNormalMap(w, h, albedo.data(), 2.2f);
+            set_normal_map(set.id, device, context, w, h, generated.data());
+        }
+        ++loaded;
+    }
+
+    if (loaded > 0) {
+        std::cout << "[TextureManager] Loaded " << loaded << " CC0 PBR texture sets from " << dir << "\n";
+    }
+    return loaded;
 }
 
 ID3D11ShaderResourceView* TextureManager::get_srv(uint16_t texture_id) const {

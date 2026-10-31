@@ -38,6 +38,10 @@ struct GPUMesh {
     uint32_t index_count = 0;
     uint32_t vertex_count = 0;
     bool is_skinned = false;
+    // Local-space bounds used for frustum culling. Kept conservative: skinned meshes
+    // carry an animation margin so a swing never falls outside the volume.
+    float bounds_min[3] = { -0.5f, -0.5f, -0.5f };
+    float bounds_max[3] = {  0.5f,  0.5f,  0.5f };
 };
 
 struct GLTFMaterialInfo {

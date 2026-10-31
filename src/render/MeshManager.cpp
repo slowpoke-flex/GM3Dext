@@ -52,6 +52,30 @@ bool MeshManager::create_gpu_mesh(ID3D11Device* device, uint16_t mesh_id,
     mesh.index_count = static_cast<uint32_t>(indices.size());
     mesh.is_skinned = is_skinned;
 
+    // Local-space bounds for frustum culling
+    for (int axis = 0; axis < 3; ++axis) {
+        const float first = (axis == 0) ? vertices[0].x : (axis == 1) ? vertices[0].y : vertices[0].z;
+        mesh.bounds_min[axis] = first;
+        mesh.bounds_max[axis] = first;
+    }
+    for (const auto& v : vertices) {
+        mesh.bounds_min[0] = std::min(mesh.bounds_min[0], v.x);
+        mesh.bounds_min[1] = std::min(mesh.bounds_min[1], v.y);
+        mesh.bounds_min[2] = std::min(mesh.bounds_min[2], v.z);
+        mesh.bounds_max[0] = std::max(mesh.bounds_max[0], v.x);
+        mesh.bounds_max[1] = std::max(mesh.bounds_max[1], v.y);
+        mesh.bounds_max[2] = std::max(mesh.bounds_max[2], v.z);
+    }
+    if (is_skinned) {
+        // Animated poses can leave the bind pose volume; inflate around the centre.
+        for (int axis = 0; axis < 3; ++axis) {
+            const float centre = 0.5f * (mesh.bounds_min[axis] + mesh.bounds_max[axis]);
+            const float half = 0.5f * (mesh.bounds_max[axis] - mesh.bounds_min[axis]) * 1.5f + 0.05f;
+            mesh.bounds_min[axis] = centre - half;
+            mesh.bounds_max[axis] = centre + half;
+        }
+    }
+
     // Vertex Buffer
     D3D11_BUFFER_DESC vbd{};
     vbd.Usage = D3D11_USAGE_DEFAULT;
@@ -96,10 +120,32 @@ bool MeshManager::update_mesh_vertices(ID3D11DeviceContext* context, uint16_t me
 
     if (vertex_count == 0 || (start_vertex == 0 && vertex_count >= it->second.vertex_count)) {
         context->UpdateSubresource(it->second.vertex_buffer.Get(), 0, nullptr, vertices.data(), 0, 0);
+        // Vertices moved: recompute bounds so culling never clips the new shape.
+        it->second.bounds_min[0] = it->second.bounds_max[0] = vertices[0].x;
+        it->second.bounds_min[1] = it->second.bounds_max[1] = vertices[0].y;
+        it->second.bounds_min[2] = it->second.bounds_max[2] = vertices[0].z;
+        for (const auto& v : vertices) {
+            it->second.bounds_min[0] = std::min(it->second.bounds_min[0], v.x);
+            it->second.bounds_min[1] = std::min(it->second.bounds_min[1], v.y);
+            it->second.bounds_min[2] = std::min(it->second.bounds_min[2], v.z);
+            it->second.bounds_max[0] = std::max(it->second.bounds_max[0], v.x);
+            it->second.bounds_max[1] = std::max(it->second.bounds_max[1], v.y);
+            it->second.bounds_max[2] = std::max(it->second.bounds_max[2], v.z);
+        }
         return true;
     }
     if (start_vertex >= it->second.vertex_count) return false;
     const uint32_t end_vertex = std::min(it->second.vertex_count, start_vertex + vertex_count);
+    // Partial update: grow (never shrink) the volume so stale geometry stays inside.
+    for (uint32_t i = start_vertex; i < end_vertex; ++i) {
+        const auto& v = vertices[i];
+        it->second.bounds_min[0] = std::min(it->second.bounds_min[0], v.x);
+        it->second.bounds_min[1] = std::min(it->second.bounds_min[1], v.y);
+        it->second.bounds_min[2] = std::min(it->second.bounds_min[2], v.z);
+        it->second.bounds_max[0] = std::max(it->second.bounds_max[0], v.x);
+        it->second.bounds_max[1] = std::max(it->second.bounds_max[1], v.y);
+        it->second.bounds_max[2] = std::max(it->second.bounds_max[2], v.z);
+    }
     D3D11_BOX box{};
     box.left = start_vertex * static_cast<UINT>(sizeof(Vertex3D));
     box.right = end_vertex * static_cast<UINT>(sizeof(Vertex3D));

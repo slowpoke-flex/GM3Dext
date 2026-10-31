@@ -138,6 +138,16 @@ target_link_libraries(GM3DStudio PRIVATE
     shell32
 )
 
+# Ship the CC0 texture sets next to the executable. TextureManager::find_asset_dir
+# looks for <exe>/assets/textures first, so a copied build folder is self-contained;
+# it also falls back to the repository root for plain dev builds.
+add_custom_command(TARGET GM3DStudio POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/textures"
+        "$<TARGET_FILE_DIR:GM3DStudio>/assets/textures"
+    COMMENT "Copying CC0 textures next to GM3DStudio.exe"
+)
+
 target_compile_definitions(GM3DStudio PRIVATE 
     _CRT_SECURE_NO_WARNINGS
     NOMINMAX
@@ -172,6 +182,10 @@ endif()
 
 include(CTest)
 if (BUILD_TESTING)
+    add_executable(FrustumMathTests tests/FrustumMathTests.cpp)
+    target_include_directories(FrustumMathTests PRIVATE src)
+    add_test(NAME FrustumMath COMMAND FrustumMathTests)
+
     add_executable(SceneSerializerTests
         tests/SceneSerializerTests.cpp
         tools/studio/SceneSerializer.cpp

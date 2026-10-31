@@ -44,6 +44,13 @@ public:
     void update_collider(PhysicsWorld& physics_world);
     void clear(PhysicsWorld& physics_world);
 
+    // Bakes a compact RGBA8 weight map (grass/rock/sand/cobble) that the terrain
+    // pixel shader uses to blend the tiled PBR detail textures. Rebuilt whenever the
+    // heights or the painted splatmap change.
+    bool update_detail_splat(ID3D11Device* device, ID3D11DeviceContext* context);
+    ID3D11ShaderResourceView* get_detail_splat_srv() const noexcept { return m_detail_splat_srv.Get(); }
+    bool has_detail_splat() const noexcept { return m_detail_splat_srv != nullptr; }
+
     const std::vector<float>& heights() const noexcept { return m_heights; }
     std::vector<float>& heights_mut() noexcept { return m_heights; }
     const std::vector<uint8_t>& splatmap() const noexcept { return m_splatmap; }
@@ -72,6 +79,8 @@ private:
     std::vector<uint32_t> m_indices;  // Cached index array
     std::vector<TerrainLayer> m_layers;
     std::vector<uint8_t> m_splatmap;  // grid_size * grid_size * 4 RGBA layer weights
+    ComPtr<ID3D11Texture2D> m_detail_splat_texture;
+    ComPtr<ID3D11ShaderResourceView> m_detail_splat_srv;
 };
 
 } // namespace GM3D
