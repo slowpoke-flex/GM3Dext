@@ -1007,20 +1007,6 @@ bool RenderWorld::init_device_and_swapchain() {
     m_config.width = width;
     m_config.height = height;
 
-    DXGI_SWAP_CHAIN_DESC scd{};
-    scd.BufferCount = 2;
-    scd.BufferDesc.Width = width;
-    scd.BufferDesc.Height = height;
-    scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    scd.BufferDesc.RefreshRate.Numerator = 60;
-    scd.BufferDesc.RefreshRate.Denominator = 1;
-    scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    scd.OutputWindow = hwnd;
-    scd.SampleDesc.Count = 1;
-    scd.SampleDesc.Quality = 0;
-    scd.Windowed = TRUE;
-    scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
     UINT createDeviceFlags = 0;
 #ifdef _DEBUG
     if (m_config.debug_validation) {
@@ -1035,7 +1021,7 @@ bool RenderWorld::init_device_and_swapchain() {
     };
     D3D_FEATURE_LEVEL featureLevel;
 
-    HRESULT hr = D3D11CreateDeviceAndSwapChain(
+    HRESULT hr = D3D11CreateDevice(
         nullptr,
         D3D_DRIVER_TYPE_HARDWARE,
         nullptr,
@@ -1043,14 +1029,85 @@ bool RenderWorld::init_device_and_swapchain() {
         featureLevels,
         ARRAYSIZE(featureLevels),
         D3D11_SDK_VERSION,
-        &scd,
-        m_swap_chain.GetAddressOf(),
         m_device.GetAddressOf(),
         &featureLevel,
         m_context.GetAddressOf()
     );
-
     if (FAILED(hr)) {
+        return false;
+    }
+
+    // Which adapter actually renders matters on hybrid laptops: the editor used to spend
+    // 32 ms inside Present because the frame was copied between GPUs.
+    ComPtr<IDXGIFactory2> factory2;
+    ComPtr<IDXGIFactory>  factory1;
+    {
+        ComPtr<IDXGIDevice> dxgi_device;
+        ComPtr<IDXGIAdapter> adapter;
+        if (SUCCEEDED(m_device.As(&dxgi_device)) &&
+            SUCCEEDED(dxgi_device->GetAdapter(adapter.GetAddressOf()))) {
+            DXGI_ADAPTER_DESC adapter_desc{};
+            if (SUCCEEDED(adapter->GetDesc(&adapter_desc))) {
+                char adapter_name[160] = {};
+                WideCharToMultiByte(CP_UTF8, 0, adapter_desc.Description, -1, adapter_name,
+                                    sizeof(adapter_name), nullptr, nullptr);
+                std::cout << "[RenderWorld] Adapter: " << adapter_name << " ("
+                          << (adapter_desc.DedicatedVideoMemory / (1024 * 1024)) << " MB)\n";
+                m_adapter_name = adapter_name;
+            }
+            adapter->GetParent(IID_PPV_ARGS(factory2.GetAddressOf()));
+            adapter->GetParent(IID_PPV_ARGS(factory1.GetAddressOf()));
+        }
+    }
+
+    // Flip-model swap chain (Windows 10+). The legacy bitblt model makes DWM copy the whole
+    // back buffer on every Present, which on hybrid graphics went as far as a cross-adapter
+    // copy: ~32 ms per frame, i.e. the "30 FPS with two objects" report. Flip model presents
+    // by handle swap and measured 3.2 ms on the same machine even before the GPU routing fix.
+    if (factory2) {
+        DXGI_SWAP_CHAIN_DESC1 scd1{};
+        scd1.Width = width;
+        scd1.Height = height;
+        scd1.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        scd1.SampleDesc.Count = 1;
+        scd1.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        scd1.BufferCount = 2;
+        scd1.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        scd1.Scaling = DXGI_SCALING_STRETCH;
+        scd1.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        scd1.Flags = 0;
+
+        factory2->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+
+        ComPtr<IDXGISwapChain1> swap_chain1;
+        if (SUCCEEDED(factory2->CreateSwapChainForHwnd(m_device.Get(), hwnd, &scd1, nullptr, nullptr,
+                                                       swap_chain1.GetAddressOf()))) {
+            hr = swap_chain1.As(&m_swap_chain);
+        } else {
+            hr = E_FAIL;
+        }
+    } else {
+        hr = E_FAIL;
+    }
+
+    // Fallback for pre-Windows-10 hosts: the classic bitblt chain still works, just slower.
+    if (FAILED(hr) && factory1) {
+        DXGI_SWAP_CHAIN_DESC scd{};
+        scd.BufferCount = 2;
+        scd.BufferDesc.Width = width;
+        scd.BufferDesc.Height = height;
+        scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        scd.BufferDesc.RefreshRate.Numerator = 60;
+        scd.BufferDesc.RefreshRate.Denominator = 1;
+        scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        scd.OutputWindow = hwnd;
+        scd.SampleDesc.Count = 1;
+        scd.Windowed = TRUE;
+        scd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+        hr = factory1->CreateSwapChain(m_device.Get(), &scd, m_swap_chain.GetAddressOf());
+    }
+
+    if (FAILED(hr) || !m_swap_chain) {
         return false;
     }
 
@@ -2263,7 +2320,13 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
     }
 
     // 6. Present SwapChain
-    m_swap_chain->Present(m_config.vsync ? 1 : 0, 0);
+    // Only when this renderer owns the window. The editor renders into an offscreen viewport
+    // texture and presents once itself after drawing the UI; presenting here as well made the
+    // editor wait two vsync intervals per frame (a hard 30 FPS ceiling on a 60 Hz display,
+    // regardless of scene contents).
+    if (!m_custom_render_target) {
+        m_swap_chain->Present(m_config.vsync ? 1 : 0, 0);
+    }
 }
 
 void RenderWorld::particle_burst(uint32_t type, float x, float y, float z, uint32_t count, float speed, float size, float r, float g, float b) {

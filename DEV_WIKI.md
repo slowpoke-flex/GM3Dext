@@ -1467,3 +1467,73 @@ Cost at 1600x900 on the reference machine: the whole grass-demo frame is **1.97 
 - `update_detail_splat` is called from `update_albedo`, so terrain painting refreshes the detail blend automatically. A new code path that changes heights without calling `update_albedo` will leave the detail weights stale.
 - Inside `RenderWorld.cpp` the unqualified `TexId::` did not resolve inside member functions even though the header was included (MSVC reported `C2653`); the file uses the fully qualified `GM3D::TexId::` everywhere. Keep it qualified.
 - `assets/textures` is required at runtime for the photographic look, not for correctness. Never make a code path depend on it - always keep the procedural branch working.
+
+---
+
+## 35. Why the editor ran at 30 FPS with three objects (2026-10-31)
+
+Report: an empty terrain plus two props rendered at **32 FPS**. The renderer's own benchmark claimed 1.9 ms per frame (522 FPS), so the cost was not in the scene.
+
+### Measuring instead of guessing
+
+`--frame-profile` splits every frame into five sections (UI, scene sync, `EngineContext::update`, ImGui draw, `Present`) and logs the average once per second:
+
+```powershell
+.\build\GM3DStudio.exe --frame-profile --bench 300 --log build\prof.log
+```
+
+The first run was unambiguous: `ui=0.35 sync=0.00 scene=2.25 imgui=0.26 present=32.63 | total=35.5 ms`.
+
+Three separate bugs were stacking, and only the last one is about the GPU.
+
+### 1. Two presents per frame
+
+`RenderWorld::render()` ended with `m_swap_chain->Present(...)` unconditionally. The editor never renders to the swap chain: it sets `set_custom_render_target(m_viewport_rtv)` and composites the viewport into an ImGui panel, then presents once itself after drawing the UI. So every editor frame presented **twice**: the first call also pushed a back buffer that still contained the *previous* frame's UI.
+
+With vsync on, each present waits for a vblank, so the frame took two intervals - a hard **30 FPS on a 60 Hz display and 72 FPS on a 144 Hz one, regardless of scene contents**. The fix is three lines: skip the present when a custom render target is active.
+
+```cpp
+if (!m_custom_render_target) {
+    m_swap_chain->Present(m_config.vsync ? 1 : 0, 0);
+}
+```
+
+### 2. The process was running on the integrated GPU
+
+Hybrid laptops route an unknown executable to the iGPU unless it opts in. `GM3DGraphicsSmoke.exe` still logs `Adapter: Intel(R) UHD Graphics 630 (128 MB)` on a machine whose discrete card is a GTX 1060, which is what the editor was rendering on. A three-line export in the Studio's `main.cpp` fixes the affinity for the whole process:
+
+```cpp
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+```
+
+Afterwards the same log line reads `Adapter: NVIDIA GeForce GTX 1060 with Max-Q Design (2965 MB)`.
+
+### 3. Bitblt swap chain on a cross-adapter surface
+
+The chain was created with `D3D11CreateDeviceAndSwapChain` and `DXGI_SWAP_EFFECT_DISCARD`. The legacy bitblt model makes DWM copy the entire back buffer on every `Present`, and when the device and the desktop live on different adapters that copy crosses the bus: **32.5 ms in Present** for a 1600x900 window. The chain is now created with `IDXGIFactory2::CreateSwapChainForHwnd` and `DXGI_SWAP_EFFECT_FLIP_DISCARD` (buffer count 2, `DXGI_SCALING_STRETCH`), with the old path kept as a fallback for pre-Windows-10 hosts.
+
+Since the chain is created from an existing device now, `D3D11CreateDeviceAndSwapChain` is gone; the device comes from `D3D11CreateDevice`, and the adapter is queried back through `IDXGIDevice::GetAdapter` so the name can be logged and shown in the status bar.
+
+### Measurements
+
+Same machine (GTX 1060 Max-Q + Intel UHD 630), 1600x900, editor viewport, three objects.
+
+| Stage | `Present` | Frame | Result |
+|:---|---:|---:|:---|
+| before | 32.6 ms | 35.5 ms | 28 FPS, vsync-locked to two intervals |
+| + Optimus exports | 3.2 ms | 6.3 ms | 158 FPS uncapped (still vsync-locked to 1 interval in use) |
+| + single present per frame | 3.2 ms | 3.4 ms | 287 FPS uncapped |
+| + flip-model chain | 1.5 ms | 3.0 ms | 329 FPS uncapped, **144 FPS** with vsync (display refresh) |
+
+The engine's own benchmark number moved from 1.9 ms to 0.37 ms for the same reason: it used to include the renderer's internal present.
+
+### Pitfalls for future work
+
+- Never call `Present` from a render path that targets a custom render target. The editor owns its single present; the DLL path (`GM3Dext.dll` inside GameMaker) still presents, because there `m_custom_render_target` is null.
+- Keep the bitblt fallback. Flip model needs Windows 10 and a `CreateSwapChainForHwnd` factory; both are checked, and the code degrades instead of failing.
+- `ResizeBuffers` must pass the same flags the chain was created with - the flip chain uses `0`, which is what `RenderWorld::resize` already passes.
+- `NvOptimusEnablement` only affects the process that exports it, so it lives in `tools/studio/main.cpp`, not in the DLL. Inside GameMaker the host executable decides the adapter.
+- The status bar now shows the adapter name next to the FPS, and `[RenderWorld] Adapter:` is printed to the log at startup. Check that line first when a frame-time report looks impossible.

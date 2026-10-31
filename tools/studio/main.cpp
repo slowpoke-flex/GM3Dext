@@ -5,6 +5,15 @@
 #include <shellapi.h>
 
 #ifdef _WIN32
+// Hybrid laptops (Optimus / AMD switchable graphics) route the process to the integrated
+// GPU unless the executable asks for the discrete one. With the bitblt swap chain that
+// meant a cross-adapter copy inside Present - measured at ~32 ms per frame on this
+// machine, which is where the editor's "30 FPS with two objects" came from.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+
 static std::string to_utf8(const std::wstring& text) {
     if (text.empty()) return {};
     const int length = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
@@ -40,6 +49,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     std::string screenshot_path;
     int capture_frames = 30;
     bool grass_demo = false;
+    bool frame_profile = false;
     if (arguments) {
         for (int i = 1; i < argument_count; ++i) {
             const std::wstring arg = arguments[i];
@@ -79,6 +89,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                 if (capture_frames < 1) capture_frames = 1;
             } else if (arg == L"--grass-demo") {
                 grass_demo = true;
+            } else if (arg == L"--frame-profile") {
+                frame_profile = true;
             }
         }
         LocalFree(arguments);
@@ -93,6 +105,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         app.set_screenshot_path(screenshot_path);
         app.set_capture_frames(capture_frames);
         app.set_grass_demo(grass_demo);
+        app.set_frame_profile(frame_profile);
         if (!app.initialize(hInstance, nCmdShow)) {
             std::cerr << "Failed to initialize GM3D Studio.\n";
             MessageBoxW(nullptr, L"Failed to initialize GM3D Studio!", L"Error", MB_ICONERROR);

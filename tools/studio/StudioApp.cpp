@@ -951,6 +951,22 @@ void StudioApp::render() {
     auto* rw = EngineContext::instance().get_render_world();
     if (!rw) return;
 
+    LARGE_INTEGER prof_freq{}, prof_mark{};
+    const bool prof = m_frame_profile;
+    if (prof) {
+        QueryPerformanceFrequency(&prof_freq);
+        QueryPerformanceCounter(&prof_mark);
+    }
+    auto mark = [&]() -> float {
+        if (!prof) return 0.0f;
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        const float ms = static_cast<float>((now.QuadPart - prof_mark.QuadPart) * 1000.0
+                                            / static_cast<double>(prof_freq.QuadPart));
+        prof_mark = now;
+        return ms;
+    };
+
     // 1. Ensure Viewport Render Texture exists and is ready
     if (!m_viewport_tex || !m_viewport_rtv || !m_viewport_srv) {
         resize_viewport_texture(m_viewport_width, m_viewport_height);
@@ -1008,7 +1024,10 @@ void StudioApp::render() {
     }
 
     // 4. Sync latest transformed entity data to shared buffer
+    FrameSample sample;
+    if (prof) sample.ui = mark();
     sync_scene_to_engine();
+    if (prof) sample.sync = mark();
 
     // 5. Render 3D Scene into Viewport Render Target with real delta_time
     if (m_viewport_rtv) {
@@ -1032,6 +1051,7 @@ void StudioApp::render() {
         }
         rw->set_custom_render_target(nullptr);
     }
+    if (prof) sample.scene = mark();
 
     // 6. Render ImGui onto Main Window Swap Chain Backbuffer
     ImGui::Render();
@@ -1042,6 +1062,7 @@ void StudioApp::render() {
     rw->get_context()->ClearRenderTargetView(back_rtv, clear_color);
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    if (prof) sample.imgui = mark();
 
     if (!m_screenshot_path.empty() && ++m_capture_frame >= std::max(1, m_capture_frames)) {
         capture_backbuffer(m_screenshot_path);
@@ -1050,6 +1071,34 @@ void StudioApp::render() {
     }
 
     rw->get_swap_chain()->Present(m_bench_frames > 0 ? 0 : 1, 0);
+    if (prof) {
+        sample.present = mark();
+        sample.total = sample.ui + sample.sync + sample.scene + sample.imgui + sample.present;
+        m_prof_samples.push_back(sample);
+        report_frame_profile();
+    }
+}
+
+void StudioApp::report_frame_profile() {
+    // Averages over one second of frames (60) are enough to see which section owns the
+    // frame, and short enough that the numbers react to what the user is doing.
+    constexpr size_t kWindow = 60;
+    if (m_prof_samples.size() < kWindow) return;
+    if (m_prof_samples.size() > kWindow * 4) {
+        m_prof_samples.erase(m_prof_samples.begin(), m_prof_samples.end() - static_cast<ptrdiff_t>(kWindow));
+    }
+
+    FrameSample avg{};
+    for (const FrameSample& s : m_prof_samples) {
+        avg.ui += s.ui; avg.sync += s.sync; avg.scene += s.scene;
+        avg.imgui += s.imgui; avg.present += s.present; avg.total += s.total;
+    }
+    const float n = static_cast<float>(m_prof_samples.size());
+    std::cout << "[frame] ui=" << avg.ui / n << " sync=" << avg.sync / n << " scene=" << avg.scene / n
+              << " imgui=" << avg.imgui / n << " present=" << avg.present / n
+              << " | total=" << avg.total / n << " ms (" << (avg.total > 0.0f ? 1000.0f * n / avg.total : 0.0f)
+              << " FPS)\n";
+    m_prof_samples.clear();
 }
 
 void StudioApp::draw_dockspace() {
@@ -3097,8 +3146,12 @@ void StudioApp::draw_status_bar() {
         ImGui::Text("Cam: (%.1f, %.1f, %.1f)", m_cam_pos[0], m_cam_pos[1], m_cam_pos[2]);
 
         // Right aligned stats
-        char right_text[128];
-        snprintf(right_text, sizeof(right_text), "FPS: %.1f (%.2f ms) | DirectX 11 PBR | Jolt Physics", io.Framerate, 1000.0f / (io.Framerate > 0 ? io.Framerate : 1.0f));
+        char right_text[192];
+        auto* rw_status = EngineContext::instance().get_render_world();
+        const char* gpu_name = rw_status ? rw_status->get_adapter_name() : nullptr;
+        snprintf(right_text, sizeof(right_text), "FPS: %.1f (%.2f ms) | %s | DirectX 11 PBR",
+                 io.Framerate, 1000.0f / (io.Framerate > 0 ? io.Framerate : 1.0f),
+                 (gpu_name && gpu_name[0]) ? gpu_name : "Unknown GPU");
         float right_width = ImGui::CalcTextSize(right_text).x;
         float avail = ImGui::GetContentRegionAvail().x;
         if (avail > right_width + 10.0f) {
