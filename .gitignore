@@ -37,3 +37,10 @@ scratch/
 
 # Nested tool repository, not part of the engine
 .agents/antigravity-computer-use/
+
+# GameMaker build output written by Igor (tools/run_in_runner.ps1)
+/cache/
+/output/
+
+# Local agent tooling (screenshots, GUI automation scripts)
+.agents/skills/antigravity-computer-use/

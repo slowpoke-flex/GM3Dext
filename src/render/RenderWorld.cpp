@@ -3,6 +3,8 @@
 
 #include "FrustumMath.h"
 #include <iostream>
+#include <fstream>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 
@@ -1952,6 +1954,23 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
             } else if (matProps.preset_id == 7 && m_texture_manager.has_texture(GM3D::TexId::METAL)) {
                 albedo_id = GM3D::TexId::METAL;
                 matProps.pad[1] = 1.0f;
+            }
+        }
+
+        // GM3D_DEBUG_BATCHES=<file> dumps the resolved draw state of the first draws. Inside
+        // the GameMaker Runner std::cout is not captured by the build log, so a file is the
+        // only way to see what the engine decided for a batch (see tools/DEV_TOOLS.md).
+        if (const char* dump_path = std::getenv("GM3D_DEBUG_BATCHES")) {
+            static int dump_budget = 80;
+            if (dump_budget > 0) {
+                --dump_budget;
+                std::ofstream dump(dump_path, std::ios::app);
+                dump << "mesh=" << mesh_id << " mat=" << material_id << " tex=" << texture_id
+                     << " albedo=" << albedo_id << " normal=" << normal_id
+                     << " preset=" << matProps.preset_id
+                     << " pad0=" << matProps.pad[0] << " pad1=" << matProps.pad[1]
+                     << " rough=" << matProps.roughness << " metal=" << matProps.metallic
+                     << " items=" << items.size() << "\n";
             }
         }
 

@@ -33,6 +33,38 @@ To capture editor startup and error output in a release build:
 
 The log is appended and may contain paths to imported resources. It is created only when `--log` is explicitly supplied.
 
+## Running inside the GameMaker LTS Runner
+
+`GM3DStudio`, `GM3DGraphicsSmoke` and the unit tests never load the extension into the host process, so the last thing they cannot prove is that the DLL behaves inside a real GameMaker game. `tools\run_in_runner.ps1` closes that gap:
+
+```powershell
+.\tools\run_in_runner.ps1              # build GM3Dext.dll, then build and run 3DTEST
+.\tools\run_in_runner.ps1 -SkipBuild   # reuse the existing build\GM3Dext.dll
+.\tools\run_in_runner.ps1 -Wait        # block until the game window is closed
+```
+
+It does not open the IDE. It calls `Igor.exe` from the installed runtime - the same command-line builder the IDE invokes for F5 - with `Windows Run`, after:
+
+1. copying `build\GM3Dext.dll` into `3DTEST\extensions\GM3Dext\` (Igor packages whatever is there, so a stale copy is easy to ship by accident);
+2. copying `assets\textures` next to the built game in `output\3DTEST\`.
+
+Igor writes the build and the game's own stdout to `build\igor.log`. The line to look for is `Entering main loop`; `[GM3Dext] Engine initialized successfully!` above it comes from the project's `gm3d_init` call.
+
+Two traps this script exists to avoid:
+
+- **Missing `assets\textures`.** The engine resolves the folder from the game's working directory. Without it every CC0 material silently falls back to the procedurally generated one: the paved plaza becomes a flat pale surface with faint grid lines, boulders lose their granite albedo. It looks exactly like a rendering regression and is not one.
+- **Invisible `std::cout`.** Inside the Runner the extension's stdout is not captured by the log - only GML `show_debug_message` output is. Set `GM3D_DEBUG_BATCHES=<path>` before launching to make `RenderWorld` append one line per draw batch with mesh, material, texture, preset sentinel and roughness to that file:
+
+  ```powershell
+  $env:GM3D_DEBUG_BATCHES = "C:\GM3Dext\build\batches.txt"
+  .\tools\run_in_runner.ps1 -SkipBuild
+  ```
+
+  Igor inherits the variable, so the Runner does too. Without a variable like this the only evidence available in the runner is pixels.
+
+A hybrid laptop note: the game runs on the adapter Windows picks for the **Runner process**, not for this repository's executables. `NvOptimusEnablement` lives in `tools\studio\main.cpp` and therefore only covers the Studio; inside GameMaker the discrete GPU has to be requested for the runtime's `Runner.exe` in Windows Settings -> Graphics.
+
+
 ## Texture assets
 
 The photographic materials live in `assets/textures/` (CC0, see `assets/textures/CREDITS.md`). They are fetched and downscaled to 512 px by:

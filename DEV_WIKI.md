@@ -1754,3 +1754,68 @@ While editing the block it became obvious the whole detail path ran on *every* t
 - A fetch script that downloads data nobody samples is a trap: it looks like the feature exists. Both `fetch_textures.py` and the loader now agree on what is used.
 - Authored maps frequently disagree with the safe constant. Here the constant was 0.85 and the photographs say 0.46-0.69; trusting the data made the plaza read as stone instead of paint.
 - If you add fetches to an already-faded path, check whether the path has a distance gate at all. It did not, and the gate pays for the new samples several times over.
+
+---
+
+## 40. First run inside the real GameMaker LTS Runner (2026-10-31)
+
+Everything in sections 33-39 was verified through `GM3DStudio.exe`, `GM3DGraphicsSmoke.exe` and the unit tests - none of which load `GM3Dext.dll` into a host process. This section is the first end-to-end run of the extension inside GameMaker itself, and it produced two findings that no amount of editor testing would have caught.
+
+### How to run it without opening the IDE
+
+`tools\run_in_runner.ps1` drives `Igor.exe` from the installed runtime with `Windows Run` - the same command-line builder the IDE calls on F5:
+
+```powershell
+.\tools\run_in_runner.ps1 -SkipBuild
+```
+
+It copies `build\GM3Dext.dll` into `3DTEST\extensions\GM3Dext\` first (Igor packages whatever is in the project, so a stale copy ships silently), copies `assets\textures` next to the built game, and writes the build plus the game's own stdout to `build\igor.log`. The line that proves the extension came up is:
+
+```
+[GM3Dext] Engine initialized successfully! Version: 1
+...
+Entering main loop.
+```
+
+### Finding 1: without the textures next to the game, the terrain looks broken
+
+The first run rendered a **flat pale surface with faint grid lines** where the plaza should be, and boulders without their granite albedo. That is not a rendering regression:
+
+`TextureManager::find_asset_dir` looks for `assets/textures` relative to the executable and the working directory. Inside the Runner the executable is the runtime's `Runner.exe`, which has no such folder, so every CC0 lookup fails and the engine quietly falls back to the procedural textures.
+
+The proof came from `GM3D_DEBUG_BATCHES`, which dumps what the engine resolved for each draw call:
+
+| Build | Terrain batch line |
+|:---|:---|
+| Studio (assets found) | `mesh=5 mat=0 tex=5 albedo=5 preset=-5 pad0=0.4 rough=0.85` |
+| Runner (assets missing) | `mesh=5 mat=0 tex=5 albedo=5 preset=-5 pad0=0 rough=0.85` |
+
+`pad0` is the detail-blend toggle from section 39: 0.4 means the four CC0 sets are bound, 0 means the shader fell back to the procedural grain. The pale plaza was the baked macro albedo with no detail on top of it.
+
+Copying `assets\textures` into `output\3DTEST\` - which is the game's working directory, and where GameMaker also puts Included Files - restored the paved plaza and the rock albedo. `run_in_runner.ps1` now does this on every run, and a shipped game must include the folder the same way.
+
+### Finding 2: the Runner ran on the integrated GPU
+
+The window reported ~35 FPS at 1107x652 with `option_game_speed=60`, while the Studio hits the display refresh rate on the same scene. `nvidia-smi` showed the GTX 1060 at 0 MiB with no processes, so the game was entirely on the Intel UHD 630.
+
+The `NvOptimusEnablement` export in `tools\studio\main.cpp` only covers the Studio: the adapter hint is read from the **host executable**, and inside GameMaker that is the runtime's `Runner.exe`, which this repository does not build. Forcing the preference for that binary took the game from ~35 FPS to the 60 FPS game-speed cap with 250-800 `fps_real` (about 1.2-4 ms per frame):
+
+```powershell
+$runner = 'C:\ProgramData\GameMakerStudio2-LTS2026\Cache\runtimes\runtime-2026.0.0.23\windows\x64\Runner.exe'
+Set-ItemProperty 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences' -Name $runner -Value 'GpuPreference=2;'
+```
+
+The same thing is available as Windows Settings -> System -> Display -> Graphics -> add `Runner.exe` -> High performance. Note that this path is per runtime version, so it has to be redone after a runtime update. Keep `NvOptimusEnablement` in the Studio: it is still what gets the editor onto the discrete GPU.
+
+### What the run did prove
+
+- The extension loads, `gm3d_init` succeeds, and the VM game reaches its main loop with no errors in the build log.
+- Terrain, the CC0 albedo sets and shadows render the same as in the editor; the paved plaza and granite boulders match the Studio screenshots.
+- Jolt steps inside the game: the dynamic boulders roll and settle between screenshots, and the shared-memory transform sync back to GML works.
+- 60 FPS at 1107x652 on the discrete GPU; 35 FPS on the integrated one, which is a useful floor for perf work.
+
+### Still not covered by this run
+
+- The demo's keyboard/mouse shortcuts could not be exercised: synthetic `SendKeys`/clicks from the automation scripts do not reach GameMaker's input state. GUI interactive testing needs a human or a real input injection driver.
+- Particle systems and spawn-key effects were not triggered for the same reason; they are still only covered by the editor and the shader check.
+- The exported `gm3d_*` GML API (59 registered functions) is exercised only as far as the demo calls it.
