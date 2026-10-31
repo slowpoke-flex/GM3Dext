@@ -478,3 +478,106 @@ function gm3d_terrain_generate(_grid_size = 128, _world_size = 240.0, _height_sc
 function gm3d_terrain_get_height(_x, _z) {
     return terrain_get_height(_x, _z);
 }
+
+// ------------------------------------------------------------------------------------------------
+// Custom PBR Materials
+// ------------------------------------------------------------------------------------------------
+
+/// @function gm3d_material_set_pbr(mat_id, r, g, b, a, roughness, metallic, emissive)
+/// @desc Defines a custom Cook-Torrance material used by entities with the matching material_id.
+function gm3d_material_set_pbr(_mat_id, _r, _g, _b, _a = 1.0, _roughness = 0.5, _metallic = 0.0, _emissive = 0.0) {
+    return material_set_pbr(_mat_id, _r, _g, _b, _a, _roughness, _metallic, _emissive);
+}
+
+/// @function gm3d_material_set_textures(mat_id, albedo_tex_id, normal_tex_id)
+/// @desc Binds albedo and normal maps to a material. Pass 0 to clear a slot.
+function gm3d_material_set_textures(_mat_id, _albedo_tex_id, _normal_tex_id = 0) {
+    return material_set_textures(_mat_id, _albedo_tex_id, _normal_tex_id);
+}
+
+/// @function gm3d_material_set_uv(mat_id, tiling_u, tiling_v, offset_u, offset_v)
+/// @desc Applies UV tiling and offset to a material.
+function gm3d_material_set_uv(_mat_id, _tiling_u = 1.0, _tiling_v = 1.0, _offset_u = 0.0, _offset_v = 0.0) {
+    return material_set_uv(_mat_id, _tiling_u, _tiling_v, _offset_u, _offset_v);
+}
+
+/// @function gm3d_material_set_alpha(mat_id, alpha_mode, alpha_cutoff)
+/// @desc Sets the alpha mode (0 = opaque, 1 = mask, 2 = blend) and the mask cutoff.
+function gm3d_material_set_alpha(_mat_id, _alpha_mode = 0.0, _alpha_cutoff = 0.5) {
+    return material_set_alpha(_mat_id, _alpha_mode, _alpha_cutoff);
+}
+
+/// @function gm3d_material_clear_all()
+/// @desc Drops every custom material definition; entities fall back to the built-in presets.
+function gm3d_material_clear_all() {
+    return material_clear_all();
+}
+
+// ------------------------------------------------------------------------------------------------
+// Shadows & Point Lights
+// ------------------------------------------------------------------------------------------------
+
+/// @function gm3d_render_set_shadow_settings(enabled, strength, softness, coverage)
+/// @desc Shadow strength, PCF softness and the world-space coverage of the first sun cascade.
+function gm3d_render_set_shadow_settings(_enabled, _strength = 0.85, _softness = 2.0, _coverage = 110.0) {
+    return render_set_shadow_settings(_enabled ? 1.0 : 0.0, _strength, _softness, _coverage);
+}
+
+/// @function gm3d_render_set_shadow_quality(quality, csm_enabled, max_shadow_lights)
+/// @desc PCF tap quality, cascade toggle, and how many point lights may cast shadows (0-4).
+function gm3d_render_set_shadow_quality(_quality = 1, _csm_enabled = true, _max_shadow_lights = 4) {
+    return render_set_shadow_quality(_quality, _csm_enabled ? 1.0 : 0.0, _max_shadow_lights);
+}
+
+/// @function gm3d_light_point_set_ex(index, x, y, z, radius, r, g, b, intensity, cast_shadow)
+/// @desc Point light with an explicit shadow flag.
+function gm3d_light_point_set_ex(_index, _x, _y, _z, _radius, _r = 1.0, _g = 1.0, _b = 1.0, _intensity = 1.0, _cast_shadow = true) {
+    return light_point_set_ex(_index, _x, _y, _z, _radius, _r, _g, _b, _intensity, _cast_shadow ? 1.0 : 0.0);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Instanced Grass & Foliage
+// ------------------------------------------------------------------------------------------------
+
+/// @function gm3d_grass_set_enabled(enabled)
+/// @desc Toggles the instanced grass pass without rebuilding the field.
+function gm3d_grass_set_enabled(_enabled = true) {
+    return grass_set_enabled(_enabled ? 1.0 : 0.0);
+}
+
+/// @function gm3d_grass_set_wind(dir_x, dir_z, speed, strength)
+/// @desc Wind direction, oscillation speed and sway strength. dir_x/dir_z are not normalised here.
+function gm3d_grass_set_wind(_dir_x = 0.707, _dir_z = 0.707, _speed = 1.8, _strength = 0.35) {
+    return grass_set_wind(_dir_x, _dir_z, _speed, _strength);
+}
+
+/// @function gm3d_grass_rebuild(density, seed)
+/// @desc Regenerates the procedural grass field over the current terrain. Returns 1.0 on success;
+///       call gm3d_grass_get_count() for the resulting clump count.
+function gm3d_grass_rebuild(_density = 1.0, _seed = 4242) {
+    return grass_rebuild(_density, _seed);
+}
+
+/// @function gm3d_grass_get_count()
+/// @desc Returns the number of live grass clumps.
+function gm3d_grass_get_count() {
+    return grass_get_count();
+}
+
+/// @function gm3d_grass_clear()
+/// @desc Removes every grass clump, including painted ones.
+function gm3d_grass_clear() {
+    return grass_clear();
+}
+
+/// @function gm3d_grass_load(filepath)
+/// @desc Loads a grass field previously written by gm3d_grass_save.
+function gm3d_grass_load(_filepath) {
+    return grass_load_file(_filepath);
+}
+
+/// @function gm3d_grass_save(filepath)
+/// @desc Writes the current grass field to disk so it can be reloaded without repainting.
+function gm3d_grass_save(_filepath) {
+    return grass_save_file(_filepath);
+}

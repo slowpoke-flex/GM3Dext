@@ -111,6 +111,8 @@ public:
     void set_shadow_quality(int quality, bool csm_enabled = true, int max_shadow_lights = 4);
     void set_sky_color(float r, float g, float b);
     void set_fog(float start, float end, float r = -1.0f, float g = -1.0f, float b = -1.0f);
+    void set_vsync(bool enabled) { m_config.vsync = enabled; }
+    [[nodiscard]] bool get_vsync() const noexcept { return m_config.vsync; }
 
     // 3D Transform Gizmo
     struct GizmoData {
@@ -235,7 +237,6 @@ private:
     ComPtr<ID3D11Buffer>           m_light_constant_buffer;
     ComPtr<ID3D11Buffer>           m_material_constant_buffer;
     ComPtr<ID3D11BlendState>       m_alpha_blend_state;
-
     std::unordered_map<uint16_t, MaterialGPU> m_materials;
     std::unordered_map<uint16_t, std::pair<uint16_t, uint16_t>> m_material_textures;
 
@@ -270,13 +271,22 @@ private:
     GM3D::TerrainSystem m_terrain_system;
     GM3D::GrassSystem m_grass_system;
     uint32_t m_max_instances = 10000;
+
+    // Instance data is written into one large ring buffer with WRITE_NO_OVERWRITE and
+    // discarded once per frame. Re-mapping a 600 KB buffer per draw made the driver
+    // rename it on every call, which cost more than the rendering itself.
+    static constexpr uint32_t kInstanceArenaCapacity = 65536;
+    uint32_t m_instance_cursor = 0;
+    bool m_instance_discard_pending = true;
+    InstanceDataGPU* begin_instance_write(uint32_t count, uint32_t& out_offset);
+    void end_instance_write();
     GizmoData m_gizmo{};
 
     // HDR & Post-Processing Pipeline
     bool m_bloom_enabled = true;
     float m_bloom_threshold = 1.0f;
     float m_bloom_intensity = 0.85f;
-    float m_exposure = 1.15f;
+    float m_exposure = 1.02f;
 
     ComPtr<ID3D11Texture2D>          m_hdr_texture;
     ComPtr<ID3D11RenderTargetView>   m_hdr_rtv;

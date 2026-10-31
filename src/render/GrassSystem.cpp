@@ -99,9 +99,11 @@ PSInput VS_Grass(VSInput input) {
     localNorm.z = input.normal.x * s + input.normal.z * c;
     localNorm.y = input.normal.y;
 
-    // Apply instance scaling (both dimensions scale smoothly with distance fade)
-    localPos.xz *= input.instScale.x * g_grass_params.w * distFade;
-    localPos.y  *= input.instScale.y * g_grass_params.z * distFade;
+    // Apply instance scaling. Distant blades are thinned instead of shrunk, so the
+    // field does not appear to sink into the ground at range.
+    float widthFade = 0.55 + 0.45 * distFade;
+    localPos.xz *= input.instScale.x * g_grass_params.w * widthFade;
+    localPos.y  *= input.instScale.y * g_grass_params.z * (0.80 + 0.20 * distFade);
 
     // 2. Dynamic Multi-Frequency Wind Simulation
     float windWeight = input.wind_ao.x;
@@ -148,16 +150,22 @@ float4 PS_Grass(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target {
     // 1. Two-Sided Shading
     float3 N = normalize(input.normal);
     if (!isFrontFace) {
-        N = -N;
+        // Foliage is two-sided but not mirror-symmetric: flip the horizontal part only and
+        // keep the upward bias, otherwise every back face points away from the sun and the
+        // blade renders as a black spike.
+        N = float3(-N.x, N.y, -N.z);
     }
 
-    // 2. Base Color Gradient (lush dark base to sunny bright tip)
+    // 2. Base Color Gradient (dark root to sunlit tip).
+    // Instance tints are authored as sRGB-ish values, so square them into linear space
+    // before lighting; otherwise the blades glow white against the linearised terrain.
     float tipFactor = saturate(input.uv.y);
-    float3 rootColor = input.color * 0.65;
-    float3 tipColor  = input.color * 1.25 + float3(0.04, 0.06, 0.01);
-    float3 baseColor = lerp(rootColor, tipColor, tipFactor);
+    float3 rootColor = input.color * 0.62;
+    float3 tipColor  = input.color * 1.02 + float3(0.01, 0.03, 0.00);
+    float3 baseColor = lerp(rootColor, tipColor, tipFactor * tipFactor);
+    baseColor *= sqrt(baseColor);
 
-    float edgeDarkening = 0.85 + 0.15 * (1.0 - abs(input.uv.x - 0.5) * 2.0);
+    float edgeDarkening = 0.88 + 0.12 * (1.0 - abs(input.uv.x - 0.5) * 2.0);
     baseColor *= edgeDarkening;
 
     // 3. Direct Sunlight Lighting & Subsurface Scattering (SSS)
@@ -165,7 +173,7 @@ float4 PS_Grass(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target {
     float3 V = normalize(g_camera_pos_time.xyz - input.worldPos);
 
     float NdotL = dot(N, L);
-    float diffuse = saturate(NdotL * 0.6 + 0.4);
+    float diffuse = saturate(NdotL * 0.75 + 0.25);
 
     float3 SSS_dir = normalize(L + N * 0.35);
     float VdotL = saturate(dot(-V, SSS_dir));
@@ -180,7 +188,7 @@ float4 PS_Grass(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target {
     // 5. Specular Sunlight Glint
     float3 H = normalize(L + V);
     float NdotH = saturate(dot(N, H));
-    float specular = pow(NdotH, 24.0) * 0.18 * tipFactor * sunIntensity;
+    float specular = pow(NdotH, 24.0) * 0.10 * tipFactor * sunIntensity;
 
     float3 finalRGB = baseColor * (directLight + ambient) + g_sun_color.xyz * specular;
 
@@ -252,69 +260,85 @@ bool GrassSystem::initialize(ID3D11Device* device) {
 }
 
 bool GrassSystem::init_geometry(ID3D11Device* device) {
-    // Generate 3 intersecting vertical quads in a star pattern (0, 60, 120 degrees)
+    // A clump is a tuft: several thin, tapered, forward-curved blades scattered
+    // across the tuft footprint. Blade width stays a fraction of the tuft so the
+    // silhouette reads as grass instead of oversized cards.
     std::vector<GrassVertex> vertices;
     std::vector<uint16_t> indices;
 
-    const float angles[3] = { 0.0f, 1.04719755f, 2.0943951f }; // 0, pi/3, 2*pi/3
-    const float half_w = 0.5f;
     const float h = 1.0f;
+    const float blade_half_width = 0.048f;   // fraction of the tuft footprint
+    const float spread = 0.46f;              // root scatter radius, same units
+    const int rows = 3;                      // 2 segments per blade
+    const int blade_count = 12;
 
-    for (int q = 0; q < 3; ++q) {
-        float theta = angles[q];
-        float c = std::cos(theta);
-        float s = std::sin(theta);
+    for (int i = 0; i < blade_count; ++i) {
+        const float fi = static_cast<float>(i);
+        const float hash = std::fmod(fi * 0.6180339887f, 1.0f);
+        const float yaw = fi * 2.39996323f;                  // golden angle
+        const float offset_yaw = yaw * 1.7f;
+        const float height = 0.62f + 0.38f * hash;
+        const float width = 0.85f + 0.30f * hash;
+        const float bend = 0.45f + 0.95f * hash;
+        const float radius = (0.18f + 0.82f * hash) * spread;
 
-        uint16_t base_idx = static_cast<uint16_t>(vertices.size());
+        const float c = std::cos(yaw);
+        const float s = std::sin(yaw);
+        const float wx = c, wz = s;      // width axis
+        const float fx = -s, fz = c;     // bend axis
 
-        // Normal: outward/upward smoothed normal
-        float nx = s * 0.35f;
-        float ny = 0.92f;
-        float nz = c * 0.35f;
-        float nlen = std::sqrt(nx * nx + ny * ny + nz * nz);
+        const float ox = std::cos(offset_yaw) * radius;
+        const float oz = std::sin(offset_yaw) * radius;
+
+        // Face normal: mostly up so the tuft shades softly, tilted toward the bend.
+        float nx = fx * 0.45f;
+        float ny = 0.88f;
+        float nz = fz * 0.45f;
+        const float nlen = std::sqrt(nx * nx + ny * ny + nz * nz);
         nx /= nlen; ny /= nlen; nz /= nlen;
 
-        // V0: Root Left
-        GrassVertex v0{};
-        v0.x = -half_w * c; v0.y = 0.0f; v0.z = -half_w * s;
-        v0.nx = nx; v0.ny = ny; v0.nz = nz;
-        v0.u = 0.0f; v0.v = 0.0f;
-        v0.wind_weight = 0.0f; v0.ao = 0.25f;
+        const uint16_t base_idx = static_cast<uint16_t>(vertices.size());
 
-        // V1: Root Right
-        GrassVertex v1{};
-        v1.x = half_w * c; v1.y = 0.0f; v1.z = half_w * s;
-        v1.nx = nx; v1.ny = ny; v1.nz = nz;
-        v1.u = 1.0f; v1.v = 0.0f;
-        v1.wind_weight = 0.0f; v1.ao = 0.25f;
+        for (int r = 0; r < rows; ++r) {
+            const float t = static_cast<float>(r) / static_cast<float>(rows - 1);
+            const float taper = std::pow(1.0f - t, 0.65f);
+            const float half = (r == rows - 1 ? blade_half_width * 0.15f : blade_half_width) * width * taper;
+            const float lean = bend * t * t;      // quadratic forward bend
+            const float y = h * height * t;
 
-        // V2: Tip Right (tapered)
-        GrassVertex v2{};
-        v2.x = (half_w * 0.6f) * c; v2.y = h; v2.z = (half_w * 0.6f) * s;
-        v2.nx = nx; v2.ny = ny; v2.nz = nz;
-        v2.u = 1.0f; v2.v = 1.0f;
-        v2.wind_weight = 1.0f; v2.ao = 1.0f;
+            const float cx = ox + fx * lean * 0.35f;
+            const float cz = oz + fz * lean * 0.35f;
 
-        // V3: Tip Left (tapered)
-        GrassVertex v3{};
-        v3.x = (-half_w * 0.6f) * c; v3.y = h; v3.z = (-half_w * 0.6f) * s;
-        v3.nx = nx; v3.ny = ny; v3.nz = nz;
-        v3.u = 0.0f; v3.v = 1.0f;
-        v3.wind_weight = 1.0f; v3.ao = 1.0f;
+            GrassVertex left{};
+            left.x = cx - wx * half;
+            left.y = y;
+            left.z = cz - wz * half;
+            left.nx = nx; left.ny = ny; left.nz = nz;
+            left.u = 0.0f; left.v = t;
+            left.wind_weight = t * t;
+            left.ao = 0.45f + 0.55f * t;
 
-        vertices.push_back(v0);
-        vertices.push_back(v1);
-        vertices.push_back(v2);
-        vertices.push_back(v3);
+            GrassVertex right{};
+            right.x = cx + wx * half;
+            right.y = y;
+            right.z = cz + wz * half;
+            right.nx = nx; right.ny = ny; right.nz = nz;
+            right.u = 1.0f; right.v = t;
+            right.wind_weight = t * t;
+            right.ao = 0.45f + 0.55f * t;
 
-        // Quad indices
-        indices.push_back(base_idx + 0);
-        indices.push_back(base_idx + 1);
-        indices.push_back(base_idx + 2);
+            vertices.push_back(left);
+            vertices.push_back(right);
+        }
 
-        indices.push_back(base_idx + 0);
-        indices.push_back(base_idx + 2);
-        indices.push_back(base_idx + 3);
+        for (int r = 0; r < rows - 1; ++r) {
+            const uint16_t v0 = static_cast<uint16_t>(base_idx + r * 2);
+            const uint16_t v1 = static_cast<uint16_t>(v0 + 1);
+            const uint16_t v2 = static_cast<uint16_t>(v0 + 2);
+            const uint16_t v3 = static_cast<uint16_t>(v0 + 3);
+            indices.push_back(v0); indices.push_back(v1); indices.push_back(v2);
+            indices.push_back(v1); indices.push_back(v3); indices.push_back(v2);
+        }
     }
 
     D3D11_BUFFER_DESC vbd{};
@@ -395,12 +419,12 @@ void GrassSystem::build_from_terrain(ID3D11Device* device, const TerrainSystem& 
     const bool has_splat = (splatmap.size() == static_cast<size_t>(N) * N * 4);
 
     // Spawning parameters
-    const float base_spacing = 0.65f / std::sqrt(std::max(0.1f, config.density));
+    const float base_spacing = 0.30f / std::sqrt(std::max(0.1f, config.density));
     const float half_world = world_size * 0.46f; // Avoid outer ocean boundary
     const uint32_t seed = config.seed;
 
     int32_t steps = static_cast<int32_t>(world_size / base_spacing);
-    steps = std::clamp(steps, 20, 300);
+    steps = std::clamp(steps, 20, 420);
 
     for (int32_t iz = -steps / 2; iz <= steps / 2; ++iz) {
         for (int32_t ix = -steps / 2; ix <= steps / 2; ++ix) {
@@ -465,9 +489,9 @@ void GrassSystem::build_from_terrain(ID3D11Device* device, const TerrainSystem& 
             inst.pad[1] = 0.0f;
 
             m_instances.push_back(inst);
-            if (m_instances.size() >= 120000) break; // Hard safety ceiling
+            if (m_instances.size() >= 260000) break; // Hard safety ceiling
         }
-        if (m_instances.size() >= 120000) break;
+        if (m_instances.size() >= 260000) break;
     }
 
     m_instance_count = static_cast<uint32_t>(m_instances.size());
@@ -496,7 +520,7 @@ uint32_t GrassSystem::paint_brush(float hit_x, float hit_z, float radius, float 
                                   const TerrainSystem& terrain, float base_w, float base_h,
                                   const float tint[3], ID3D11Device* device) {
     if (!terrain.is_generated() || radius <= 0.0f || density <= 0.0f) return 0;
-    if (m_instances.size() >= 120000) return 0;
+    if (m_instances.size() >= 260000) return 0;
 
     m_brush_accum += density * 30.0f * std::clamp(dt, 0.001f, 0.05f);
     int to_spawn = static_cast<int>(m_brush_accum);

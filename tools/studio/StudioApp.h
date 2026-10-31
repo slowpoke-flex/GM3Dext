@@ -43,6 +43,14 @@ public:
     int run();
     void shutdown();
 
+    // Command-line driven modes (see tools/DEV_TOOLS.md)
+    void set_bench_frames(int frames) { m_bench_frames = frames; }
+    void set_bench_stress(bool stress) { m_bench_stress = stress; }
+    void set_startup_scene(std::string path) { m_startup_scene = std::move(path); }
+    void set_screenshot_path(std::string path) { m_screenshot_path = std::move(path); }
+    void set_capture_frames(int frames) { m_capture_frames = frames; }
+    void set_grass_demo(bool enabled) { m_grass_demo = enabled; }
+
     LRESULT handle_message(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
@@ -239,6 +247,24 @@ private:
 
     // Shared Memory buffer backing EngineContext
     std::vector<uint8_t> m_shared_buffer;
+
+    // Benchmark mode (see --bench in main.cpp)
+    int m_bench_frames = 0;
+    bool m_bench_stress = false;
+    int m_bench_frame = 0;
+    std::vector<float> m_bench_cpu_ms;
+    std::vector<float> m_bench_total_ms;
+    void build_bench_stress_scene();
+    void finish_bench();
+
+    // Startup automation: open a scene, build a grass demo, save a screenshot
+    std::string m_startup_scene;
+    std::string m_screenshot_path;
+    int m_capture_frames = 30;
+    int m_capture_frame = 0;
+    bool m_grass_demo = false;
+    bool capture_backbuffer(const std::string& path);
+    void build_grass_demo();
 };
 
 } // namespace GM3D::Studio

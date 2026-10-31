@@ -243,8 +243,12 @@ struct Scene {
     int max_shadow_lights = 4;   // Max point lights casting omnidirectional shadows (0..4)
 
     // Ambient Skylight & Atmosphere
-    float ambient_color[3] = { 0.45f, 0.58f, 0.78f };
-    float ambient_intensity = 1.15f;
+    // Neutral daylight fill. A saturated sky-blue ambient at high intensity washed the
+    // albedo out to pastel (blue channel alone reached ~1.2, more than the sun), so the
+    // fill is now near-neutral and modest; the sky tint lives in the hemispheric term
+    // of the pixel shader instead.
+    float ambient_color[3] = { 0.42f, 0.45f, 0.48f };
+    float ambient_intensity = 0.55f;
     float sky_color[3] = { 0.12f, 0.38f, 0.85f };
     float fog_start = 160.0f;
     float fog_end = 600.0f;
@@ -263,8 +267,8 @@ struct Scene {
     // Procedural Grass & Foliage (Brushed / Painted)
     bool grass_enabled = false;
     float grass_density = 1.0f;
-    float grass_height = 0.85f;
-    float grass_width = 0.22f;
+    float grass_height = 0.55f;
+    float grass_width = 0.40f;
     float grass_max_distance = 95.0f;
     float grass_fade_range = 25.0f;
     float grass_wind_speed = 1.8f;

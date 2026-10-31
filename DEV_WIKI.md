@@ -114,7 +114,7 @@ All third-party code integrated into this framework must be permissive:
 
 ---
 
-## 7. Exported C API Reference (26 Functions)
+## 7. Exported C API Reference (59 Functions)
 | Exported Name | Calling Conv | Arguments | Return | Description |
 |:---|:---|:---|:---|:---|
 | `init_extension` | `__cdecl` | `(void* buf, double size, void* hwnd)` | `double` | Initializes D3D11 device, Jolt world & binds memory |
@@ -143,6 +143,46 @@ All third-party code integrated into this framework must be permissive:
 | `physics_get_raycast_y`| `__cdecl` | `()` | `double` | Gets Y coordinate of last raycast intersection |
 | `physics_get_raycast_z`| `__cdecl` | `()` | `double` | Gets Z coordinate of last raycast intersection |
 | `get_framework_version`| `__cdecl` | `()` | `double` | Returns protocol version (`1.0`) |
+
+### Additional exports
+
+| Exported Name | Calling Conv | Arguments | Return | Description |
+|:---|:---|:---|:---|:---|
+| `texture_load` | `__cdecl` | `(const char* filepath)` | `double` | Loads a PBR albedo texture, returns its `texture_id` |
+| `texture_set_normal_map` | `__cdecl` | `(target_tex_id, normal_tex_id)` | `double` | Attaches a normal map to an existing texture id |
+| `light_set_sun` | `__cdecl` | `(dx, dy, dz, r, g, b, intensity)` | `double` | Directional sun direction, colour and intensity |
+| `light_set_ambient` | `__cdecl` | `(r, g, b, intensity)` | `double` | Global ambient / skylight fill |
+| `light_point_set` | `__cdecl` | `(index, x, y, z, radius, r, g, b, intensity)` | `double` | Writes one of the 16 point lights without shadows |
+| `light_point_set_ex` | `__cdecl` | `(index, x, y, z, radius, r, g, b, intensity, cast_shadow)` | `double` | Point light with an explicit shadow flag |
+| `light_point_clear` | `__cdecl` | `()` | `double` | Disables every point light |
+| `render_set_shadow_settings` | `__cdecl` | `(enabled, strength, softness, coverage)` | `double` | Shadow strength, PCF softness and world coverage |
+| `render_set_shadow_quality` | `__cdecl` | `(quality, csm_enabled, max_shadow_lights)` | `double` | PCF tap quality, cascade toggle, shadowed point-light budget |
+| `physics_set_transform` | `__cdecl` | `(body_id, x, y, z, qx, qy, qz, qw)` | `double` | Teleports a body to an explicit position and rotation |
+| `render_set_sky_color` | `__cdecl` | `(r, g, b)` | `double` | Clear colour and fog tint |
+| `render_set_fog` | `__cdecl` | `(start, end, r, g, b)` | `double` | Linear distance fog range and colour |
+| `show_f5_menu` | `__cdecl` | `(current_mode, invert_y)` | `double` | Runs one frame of the built-in F5 showcase menu |
+| `set_gizmo` | `__cdecl` | `(enabled, x, y, z, sx, sy, sz, axis_len)` | `double` | Draws the 3D transform gizmo at a position |
+| `render_set_bloom` | `__cdecl` | `(enabled, intensity, threshold)` | `double` | HDR bloom toggle, strength and bright-pass threshold |
+| `particle_spawn_burst` | `__cdecl` | `(type, x, y, z, count, speed, size, r, g, b)` | `double` | Emits a spherical particle burst |
+| `particle_spawn_ring` | `__cdecl` | `(type, x, y, z, radius, count, r, g, b)` | `double` | Emits a ring of particles |
+| `particle_clear` | `__cdecl` | `()` | `double` | Removes all live particles |
+| `terrain_generate` | `__cdecl` | `(grid_size, world_size, height_scale, seed)` | `double` | Builds the procedural terrain mesh and heightfield collider |
+| `terrain_get_height` | `__cdecl` | `(x, z)` | `double` | Bilinear terrain elevation at a world position |
+| `terrain_apply_edit_data` | `__cdecl` | `(const void* data, size_bytes)` | `double` | Uploads a sculpted height patch |
+| `material_set_pbr` | `__cdecl` | `(mat_id, r, g, b, a, roughness, metallic, emissive)` | `double` | Defines a custom Cook-Torrance material |
+| `material_set_textures` | `__cdecl` | `(mat_id, albedo_tex_id, normal_tex_id)` | `double` | Binds albedo and normal maps to a material |
+| `material_set_uv` | `__cdecl` | `(mat_id, tiling_u, tiling_v, offset_u, offset_v)` | `double` | UV tiling and offset for a material |
+| `material_set_alpha` | `__cdecl` | `(mat_id, alpha_mode, alpha_cutoff)` | `double` | Opaque / mask / blend mode and cutoff |
+| `material_clear_all` | `__cdecl` | `()` | `double` | Resets the custom material table |
+| `grass_set_enabled` | `__cdecl` | `(enabled)` | `double` | Toggles the instanced grass pass |
+| `grass_set_wind` | `__cdecl` | `(dir_x, dir_z, speed, strength)` | `double` | Wind direction, speed and sway strength |
+| `grass_rebuild` | `__cdecl` | `(density, seed)` | `double` | Regenerates the grass placement buffer |
+| `grass_get_count` | `__cdecl` | `()` | `double` | Returns the live blade count |
+| `grass_clear` | `__cdecl` | `()` | `double` | Removes all painted grass |
+| `grass_load_file` | `__cdecl` | `(const char* filepath)` | `double` | Loads a painted grass buffer from disk |
+| `grass_save_file` | `__cdecl` | `(const char* filepath)` | `double` | Writes the painted grass buffer to disk |
+
+`src/dllmain.cpp` is the source of truth for this list. All 59 exports are registered in `3DTEST/extensions/GM3Dext/GM3Dext.yy`, and the GML wrapper library (`3DTEST/scripts/scr_gm3d/scr_gm3d.gml`, mirrored byte-for-byte into `gml_example/scr_gm3d.gml` by `tools/sync_gml_sdk.ps1`) wraps every one of them.
 
 ---
 
@@ -1073,6 +1113,9 @@ GM3D features a dedicated, native standalone 3D world editor application (**`GM3
 The previous benchmark table was removed: its numbers did not identify a reproducible test scene, hardware or captured measurements. Do not treat performance gains as measured until a fixed scene is profiled before and after changes.
 
 The full development plan is **not complete**. In particular:
+- The grass API, `material_clear_all` and the material/shadow setters are registered in `3DTEST/extensions/GM3Dext/GM3Dext.yy` and wrapped by the GML SDK, and `tools/sync_gml_sdk.ps1 -Check` (run by `tools/check.ps1`) keeps `gml_example/scr_gm3d.gml` identical to the 3DTEST copy. The example project previously lagged behind at 8 wrapper functions; both copies now expose the full set.
+- Mesh colliders are not implemented; `Diagnostics.cpp` reports the cylinder proxy that the editor substitutes. Any scene that relies on a mesh collider is physically wrong, not merely approximate.
+- `RenderWorld::render_frame` used to have no frustum culling and no transparent depth sorting, and the shadow pass redrew every caster for every cascade and every point-light face. Both were fixed in §33.
 - Run an exported scene in GameMaker LTS with a model, material, painted terrain, light, collider and animation. LTS 2026.0.0.23 ran a temporary `3DTEST` copy with a terrain and static cube fixture passed through the actual exporter: the loader created two entities, terrain height was 7, and cleanup succeeded. This smoke test did not verify rendering, imported models, painted layer appearance, lights or animation; the complete runtime round trip remains unverified.
 - Check resource import, missing-file relinking, material texture clearing and Undo/Redo in the editor, including project moves and narrow window layouts. Review the remaining UI/UX work.
 - Check Play/Stop restoration, hierarchy transforms, shadows and performance on representative scenes. Add missing coverage where necessary.
@@ -1247,6 +1290,25 @@ The full development plan is **not complete**. In particular:
 - **GameMaker LTS 2026 Verification**:
   - Exported and verified in `Runner.exe` x64: 86,410 procedural 3D grass clumps simulated and rendered stably at 60 FPS in a single draw call with zero memory leaks.
 
+### 17a. Tuft geometry rework (2026-10-31)
+
+The original clump geometry was three crossed quads, each one a barely tapered card `base_width` wide and `base_height` tall. With the shipped defaults (0.22 m wide, 0.85 m tall) every clump rendered as a large pale paddle, and because the clump footprint equalled the blade width there was no tuft structure at all: the field read as scattered cardboard.
+
+Changes in `GrassSystem::init_geometry` and `s_grass_hlsl`:
+
+- **Blade-shaped geometry.** A clump is now 12 thin ribbons of 3 rows each, laid out with a golden-angle yaw and a pseudo-random root offset, height, width and bend. Blade width is 0.045 of the tuft footprint instead of 0.95, so `base_width` now means "tuft diameter" rather than "blade width".
+- **Taper to a point.** Row width follows `(1 - t)^0.65`, ending at 15% width, so silhouettes are pointed instead of rectangular.
+- **Per-row wind weight** is `t^2` (stiff at the root, loose at the tip) and **AO** runs 0.18 -> 1.0, giving the tuft contact shading.
+- **Distance handling.** The vertex shader used to scale the whole tuft by the distance fade, which made far grass sink into the ground. It now thins the blade (`widthFade = 0.55 + 0.45 * fade`) and keeps 80-100% of the height.
+- **Colour.** Root is `0.42x` the instance tint instead of `0.65x`, the tip gradient is quadratic, and the sun specular was reduced from 0.18 to 0.10.
+- **Defaults** in `SceneData.h`: `grass_height` 0.85 -> 0.55, `grass_width` 0.22 -> 0.40 (tuft diameter), spawn spacing 0.65 -> 0.34 m.
+
+Cost at the shipped density (90,601 clumps): about 1.3 ms of a 3.3 ms frame (303 FPS) on the reference machine, measured with `--grass-demo --bench`.
+
+Note that `build_from_terrain` clamps the spawn grid to 300 steps, so reducing `base_spacing` increases density inside a smaller radius rather than growing the covered area. The grass field therefore covers roughly +/-51 m around the origin at default density.
+
+> Later revisions to blade lighting, tint and density are in §34.
+
 ---
 
 ### 18. Unity-Style Interactive Foliage Painting (Grass Brush) & Zero-Default Architecture
@@ -1292,3 +1354,116 @@ The full development plan is **not complete**. In particular:
     - `grass_save_file(const char* filepath)`
 
 
+
+---
+
+## 33. Render-side culling, shadow-pass batching and the instance arena (2026-10-31)
+
+The forward renderer drew every active entity in every pass. With two sun cascades and four shadow-casting point lights that is 26 full-scene shadow passes per frame, plus a camera pass with no frustum test at all. Measured on the synthetic `--bench-stress` scene (576 props, 4 shadowed point lights), a frame took **23.0 ms** (43 FPS).
+
+### What was wrong
+
+Profiling with `ID3D11DeviceContext::Flush` inside the pass boundaries showed the GPU finishing the same frame in about **1 ms**. The remaining ~22 ms was CPU time spent inside `Map(D3D11_MAP_WRITE_DISCARD)` on the 600 KB dynamic instance buffer: one call per draw, up to 312 per frame. Every discard makes the driver rename the whole allocation, and the cost scales with buffer size, not with the amount written. Shrinking the same buffer to 120 KB dropped the frame to 1.39 ms without any other change - which is what identified the culprit.
+
+### Changes
+
+1. **Instance arena (`RenderWorld::begin_instance_write`)**. One dynamic buffer of 65536 instances (3.9 MB). The cursor resets per frame; the first write uses `WRITE_DISCARD`, every following write uses `WRITE_NO_OVERWRITE` at a monotonic offset. No region is reused within a frame, so pending draws never read memory that has been rewritten. Draws bind the buffer with a byte offset instead of re-uploading.
+2. **Frustum culling in the camera pass.** `GPUMesh` now carries local bounds computed at upload (`MeshManager::create_gpu_mesh`); skinned meshes are inflated by 1.5x because an animated pose can leave the bind-pose volume. `transform_aabb` builds the world AABB from eight transformed corners, so mirrored (negative) scale stays correct. Six-plane tests live in `src/render/FrustumMath.h` and are unit tested by `FrustumMathTests`.
+3. **Per-light caster culling.** The shadow pass tests each caster against the cascade or point-light face it is being rendered into, instead of redrawing all of them.
+4. **Depth-only fast path.** Shadow draws skip material constant-buffer uploads, texture binds and blend-state changes.
+5. **Pose cache.** Skeletal poses are evaluated once per entity per frame and reused by the shadow and camera passes. Previously a skinned entity was re-evaluated for every cascade and every light face.
+6. **Identity bone upload hoisting.** The 128 identity matrices that rigid meshes need are uploaded once per pass rather than once per batch.
+7. **Transparent sorting.** Batches with `alpha_mode == 2` are drawn after opaque geometry, far to near, and also sorted inside the batch. Previously they were drawn in `unordered_map` order, so overlapping glass could flicker frame to frame.
+
+### Measurements
+
+Same machine, same build configuration, `--bench 180`, viewport 1280x720, vsync off, 30-frame warm-up excluded. p50 of `total_ms`.
+
+| Scene | Before | After | Speed-up |
+|:---|---:|---:|---:|
+| `--bench-stress` (580 entities, 26 shadow views) | 23.00 ms (43 FPS) | 1.07 ms (937 FPS) | 21x |
+| default editor scene (3 entities) | 1.91 ms (522 FPS) | 1.96 ms (511 FPS) | unchanged (2% run-to-run noise) |
+
+The default scene is unchanged by design: three objects fit in the viewport and their cost was already dominated by post-processing.
+
+### Verification
+
+- `FrustumMathTests` covers the plane extraction and the AABB transform (inside, behind, beyond-far, beside, straddling, enclosing boxes; rotation, scale, mirrored scale).
+- Rendered output was compared before and after the change with a hidden-window capture of the same scene: the default scene is **pixel-identical** (max channel difference 0). On the stress scene the residual differences are concentrated on silhouette edges and are the same size as the difference between two runs of the *same* build, i.e. run-to-run noise from the point lights settling, not a culling artefact.
+- `SceneSerializerTests`, `EngineLifecycleTests`, `GM3DShaderCheck` and `GM3DGraphicsSmoke` still pass.
+
+### Pitfalls for future work
+
+- Never reintroduce a per-draw `Map(WRITE_DISCARD)` on the shared instance buffer. If a new pass needs instance data, call `begin_instance_write` and pass the offset to `IASetVertexBuffers`.
+- The arena is 65536 instances per frame. A scene that needs more will silently stop adding instances; check `begin_instance_write` returning `nullptr` before assuming geometry was drawn.
+- Frustum planes are extracted from matrix *columns* because the engine uses row-vector arithmetic with row-major storage. Using rows silently culls the wrong half of the world.
+- Skinned bounds are heuristic. A model whose animation travels far from its bind pose can be culled early; raise the inflation factor in `create_gpu_mesh` rather than disabling culling for all skinned meshes.
+
+---
+
+## 34. Photographic CC0 materials, linear albedo and the lighting rebalance (2026-10-31)
+
+The editor looked like pastel paint: a bright, desaturated, blue-grey field with pale yellow-green grass. Three independent mistakes were stacking.
+
+### Why it looked washed out
+
+1. **Albedo was gamma corrected twice.** Every texture was sampled and multiplied as if it were linear, but the composite pass ends with `pow(mapped, 1/2.2)`. Photographic or authored sRGB values therefore got corrected a second time, which lifts shadows and flattens saturation.
+2. **The blue ambient dominated the sun.** `AmbientColor` defaulted to `(0.45, 0.58, 0.78)` at intensity `1.15` and was then multiplied by a hemispheric term that peaked at `1.35` in blue. Up-facing surfaces received roughly `1.2` in blue from ambient alone, which desaturated every albedo towards white.
+3. **Post grading pushed it further.** The composite added `+18%` saturation and a `1.14x` blue shadow tint, which on a blue-lit image just produced pastel grey-blue.
+
+### Lighting changes
+
+| Knob | Before | After | Why |
+|:---|:---|:---|:---|
+| `SceneData::ambient_color` | `0.45, 0.58, 0.78` | `0.42, 0.45, 0.48` | Neutral fill; the sky tint lives in the hemispheric term |
+| `SceneData::ambient_intensity` | `1.15` | `0.55` | Indirect light must not exceed direct sunlight |
+| shader `skyLight` | `0.75, 0.95, 1.35` | `0.66, 0.78, 1.00` | Keeps a cool sky without crushing hue |
+| post `shadowTint` | `1.04, 1.06, 1.14` | `1.01, 1.02, 1.05` | Removes the blue cast |
+| post `satBoost` | `1.18` | `1.05` | Photographs already carry saturation |
+| `RenderWorld::m_exposure` | `1.15` | `1.02` | Linear albedo is darker; this rebalances without clipping |
+
+**Conductor fill light.** With `metallic = 0.85` a material has almost no diffuse term, and with no environment probe a metal only showed the sun's specular lobe - the gold cube rendered as a black box. The pixel shader now adds `envProbe * F0 * (1 - roughness) * 2.0 * metallic`, where `envProbe` is a fixed sky/ground hemisphere `(0.52, 0.66, 0.92)` / `(0.30, 0.26, 0.21)`. It is deliberately independent of `AmbientColor`, which is now too dim to serve as a probe.
+
+### Texture pipeline
+
+`assets/textures/` holds seven CC0 texture sets from [ambientCG](https://ambientcg.com) (CC0 1.0, see `assets/textures/CREDITS.md`), generated by `python tools/fetch_textures.py`:
+
+| Folder | Used for |
+|:---|:---|
+| `Ground037` | terrain layer 0, meadow soil and moss |
+| `Rock030` | terrain layer 1, cliff granite; material preset 8 |
+| `Ground080` | terrain layer 2, coastal sand |
+| `PavingStones131` | terrain layer 3, plaza flagstone |
+| `Wood066` | material preset 5, timber |
+| `Metal032` | material preset 7, steel |
+| `Grass001` | `TexId::TURF`, dense green turf for future materials |
+
+Each set keeps `_Color.jpg`, `_Normal.png` (OpenGL convention) and `_Roughness.jpg` at 512 px; the roughness map is not sampled by the shader yet. Total 4.0 MB.
+
+- **IDs are reserved, not appended.** `src/render/BuiltinTextures.h` fixes `0..13` (procedural debug patterns, baked terrain albedo, the CC0 sets) and moves dynamic ids to `32`, so a texture id stored in a scene file means the same thing across builds.
+- **Loading is optional.** `TextureManager::load_builtin_texture_sets` looks for `<exe>/assets/textures`, then `../..`, then the working directory, and honours the `GM3D_ASSET_DIR` environment variable. If nothing is found it logs once and the engine keeps the procedural textures, so the DLL still works dropped into a GameMaker project with no assets.
+- **CMake copies the folder** next to `GM3DStudio.exe` post-build, so a copied build directory is self-contained.
+
+### Terrain detail blend
+
+The baked terrain albedo is 2048 px across a 240 m world - about 8 texels per metre. It carries biome colour, but at that density it can never read as a surface. `TerrainSystem::update_detail_splat` bakes a 256x256 RGBA8 weight map (grass / rock / sand / cobble) from the same hypsometric ramps as the albedo, with the painted splat map overriding it, and the pixel shader blends four tiled sets on top:
+
+- Detail UVs are world-space (`WorldPos.xz * 0.40`, about 2.5 m per tile), so the texture never stretches with the mesh.
+- Albedo is squared into linear space (`c * c`); normal maps are not.
+- Flat ground only samples the XZ projection. Faces steeper than `N.y^2 < 0.80` additionally sample a side projection and cross-fade, so cliffs do not smear.
+- The baked albedo is demoted to a low-frequency hue tint, and that tint only follows the grass and sand weights - otherwise the stone plaza picked up a green cast from the meadow palette.
+
+Cost at 1600x900 on the reference machine: the whole grass-demo frame is **1.97 ms p50** (508 FPS), the same as the default three-object scene, and the stress scene is **0.92 ms** (1087 FPS).
+
+### Grass follow-ups
+
+- **Back faces no longer go black.** The grass shader flipped the whole normal on back faces, so the downward copy faced away from the sun and the blade rendered as a black spike. It now flips only the horizontal component and keeps the upward bias.
+- **Tint is gamma corrected** with `baseColor *= sqrt(baseColor)` (about gamma 1.5): the tint values are authored, not photographs, and full squaring made blades much darker than the terrain.
+- **Density.** The `steps` clamp in `build_from_terrain` went from 300 to 420 and `base_spacing` from 0.34 to 0.30, giving **177,241 clumps** over roughly +/-63 m instead of 90,601 over +/-51 m. The hard instance ceiling and the paint-brush cap both went to 260,000 so the field is not truncated asymmetrically.
+
+### Pitfalls for future work
+
+- Any new albedo texture must be squared (or `pow(x, 2.2)`) before it reaches the lighting maths. Normal, roughness and metallic maps must not be.
+- `update_detail_splat` is called from `update_albedo`, so terrain painting refreshes the detail blend automatically. A new code path that changes heights without calling `update_albedo` will leave the detail weights stale.
+- Inside `RenderWorld.cpp` the unqualified `TexId::` did not resolve inside member functions even though the header was included (MSVC reported `C2653`); the file uses the fully qualified `GM3D::TexId::` everywhere. Keep it qualified.
+- `assets/textures` is required at runtime for the photographic look, not for correctness. Never make a code path depend on it - always keep the procedural branch working.

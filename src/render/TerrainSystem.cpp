@@ -391,8 +391,133 @@ bool TerrainSystem::update_albedo(ID3D11Device* device, ID3D11DeviceContext* con
             albedo_rgba[pIdx + 3] = 255;
         }
     }
-    if (create) return tex_mgr.set_texture_rgba(TERRAIN_TEXTURE_ID, device, context, TEX_SIZE, TEX_SIZE, albedo_rgba.data(), "Terrain_Albedo", true);
-    return tex_mgr.update_texture_region(TERRAIN_TEXTURE_ID, context, left, top, region_width, bottom - top, albedo_rgba.data());
+    bool albedo_ok = create
+        ? tex_mgr.set_texture_rgba(TERRAIN_TEXTURE_ID, device, context, TEX_SIZE, TEX_SIZE, albedo_rgba.data(), "Terrain_Albedo", true)
+        : tex_mgr.update_texture_region(TERRAIN_TEXTURE_ID, context, left, top, region_width, bottom - top, albedo_rgba.data());
+    // Detail weights follow the palette and the painted splatmap, so refresh them here
+    // rather than at every call site.
+    update_detail_splat(device, context);
+    return albedo_ok;
+}
+
+bool TerrainSystem::update_detail_splat(ID3D11Device* device, ID3D11DeviceContext* context) {
+    if (!device || !context || m_heights.empty()) return false;
+
+    // 256x256 is plenty: the layer weights are low frequency and the shader only uses
+    // them to pick between the four tiled detail textures.
+    constexpr uint32_t S = 256;
+    const uint32_t N = m_config.grid_size;
+    const float W = m_config.world_size;
+    const float half_w = W * 0.5f;
+    const bool has_splat = (m_splatmap.size() == static_cast<size_t>(N) * N * 4);
+    std::vector<uint8_t> rgba(static_cast<size_t>(S) * S * 4);
+
+    auto ramp = [](float value, float a, float b) {
+        const float t = std::clamp((value - a) / (b - a), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    auto smooth = [](float edge0, float edge1, float value) {
+        const float t = std::clamp((value - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+
+    for (uint32_t y = 0; y < S; ++y) {
+        for (uint32_t x = 0; x < S; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(S);
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(S);
+            const float world_x = -half_w + u * W;
+            const float world_z = -half_w + v * W;
+            const float h = get_height(world_x, world_z);
+
+            float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+            get_normal(world_x, world_z, nx, ny, nz);
+            const float slope = std::sqrt(std::max(0.0f, 1.0f - ny * ny));
+
+            // Mirrors the hypsometric palette used when baking the albedo so the detail
+            // layer always matches the colour underneath it.
+            float grass = ramp(h, 1.6f, 3.2f) * (1.0f - ramp(h, 7.5f, 14.5f));
+            float rock = ramp(h, 14.0f, 22.0f);
+            float sand = 1.0f - ramp(h, 1.4f, 3.0f);
+
+            const float cliff = ramp(slope, 0.36f, 0.72f);
+            rock = std::max(rock, cliff);
+            grass *= (1.0f - cliff);
+            sand *= (1.0f - cliff);
+
+            // Central stone plaza is fully paved.
+            const float du = u - 0.5f;
+            const float dv = v - 0.5f;
+            const float plaza = smooth(0.12f, 0.05f, std::sqrt(du * du + dv * dv));
+            const float cobble = plaza * 1.0f;
+            grass *= (1.0f - plaza);
+            rock *= (1.0f - plaza);
+            sand *= (1.0f - plaza);
+
+            float weights[4] = { grass, rock, sand, cobble };
+
+            if (has_splat) {
+                const float gx = u * static_cast<float>(N - 1);
+                const float gy = v * static_cast<float>(N - 1);
+                const uint32_t x0 = std::min(static_cast<uint32_t>(gx), N - 2);
+                const uint32_t y0 = std::min(static_cast<uint32_t>(gy), N - 2);
+                const float fx = gx - static_cast<float>(x0);
+                const float fy = gy - static_cast<float>(y0);
+                const size_t i00 = (static_cast<size_t>(y0) * N + x0) * 4;
+                const size_t i10 = (static_cast<size_t>(y0) * N + x0 + 1) * 4;
+                const size_t i01 = (static_cast<size_t>(y0 + 1) * N + x0) * 4;
+                const size_t i11 = (static_cast<size_t>(y0 + 1) * N + x0 + 1) * 4;
+
+                float painted[4] = {};
+                float painted_sum = 0.0f;
+                for (int c = 0; c < 4; ++c) {
+                    const float w00 = static_cast<float>(m_splatmap[i00 + c]) / 255.0f;
+                    const float w10 = static_cast<float>(m_splatmap[i10 + c]) / 255.0f;
+                    const float w01 = static_cast<float>(m_splatmap[i01 + c]) / 255.0f;
+                    const float w11 = static_cast<float>(m_splatmap[i11 + c]) / 255.0f;
+                    const float w0 = w00 * (1.0f - fx) + w10 * fx;
+                    const float w1 = w01 * (1.0f - fx) + w11 * fx;
+                    painted[c] = w0 * (1.0f - fy) + w1 * fy;
+                    painted_sum += painted[c];
+                }
+                if (painted_sum > 0.001f) {
+                    const float blend_t = std::clamp(painted_sum, 0.0f, 1.0f);
+                    for (int c = 0; c < 4; ++c) {
+                        weights[c] = std::clamp(weights[c], 0.0f, 1.0f) * (1.0f - blend_t)
+                                   + (painted[c] / painted_sum) * blend_t;
+                    }
+                }
+            }
+
+            float total = weights[0] + weights[1] + weights[2] + weights[3];
+            if (total < 0.0001f) { weights[0] = 1.0f; total = 1.0f; }
+
+            const size_t idx = (static_cast<size_t>(y) * S + x) * 4;
+            for (int c = 0; c < 4; ++c) {
+                rgba[idx + c] = static_cast<uint8_t>(std::clamp(weights[c] / total * 255.0f, 0.0f, 255.0f));
+            }
+        }
+    }
+
+    if (!m_detail_splat_texture) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = S;
+        desc.Height = S;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(device->CreateTexture2D(&desc, nullptr, m_detail_splat_texture.GetAddressOf()))) return false;
+        if (FAILED(device->CreateShaderResourceView(m_detail_splat_texture.Get(), nullptr,
+                                                   m_detail_splat_srv.GetAddressOf()))) {
+            m_detail_splat_texture.Reset();
+            return false;
+        }
+    }
+
+    context->UpdateSubresource(m_detail_splat_texture.Get(), 0, nullptr, rgba.data(), S * 4, 0);
+    return true;
 }
 
 bool TerrainSystem::update_mesh(ID3D11Device* device, MeshManager& mesh_mgr) {
