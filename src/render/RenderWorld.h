@@ -9,6 +9,7 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <cstdint>
 #include <vector>
@@ -177,6 +178,9 @@ public:
 
     // Studio & Editor Accessors
     ID3D11Device* get_device() const { return m_device.Get(); }
+    // Name of the DXGI adapter in use. Printed once at startup and shown in the status bar:
+    // on a hybrid laptop the answer decides whether the editor runs at 30 or 144 FPS.
+    const char* get_adapter_name() const { return m_adapter_name.c_str(); }
     ID3D11DeviceContext* get_context() const { return m_context.Get(); }
     IDXGISwapChain* get_swap_chain() const { return m_swap_chain.Get(); }
     ID3D11RenderTargetView* get_back_buffer_rtv() const { return m_render_target_view.Get(); }
@@ -199,6 +203,7 @@ private:
     ComPtr<ID3D11Device>           m_device;
     ComPtr<ID3D11DeviceContext>    m_context;
     ComPtr<IDXGISwapChain>         m_swap_chain;
+    std::string                    m_adapter_name;
     ComPtr<ID3D11RenderTargetView> m_render_target_view;
     ComPtr<ID3D11Texture2D>        m_depth_stencil_buffer;
     ComPtr<ID3D11DepthStencilView> m_depth_stencil_view;

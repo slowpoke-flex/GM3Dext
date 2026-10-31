@@ -50,6 +50,8 @@ public:
     void set_screenshot_path(std::string path) { m_screenshot_path = std::move(path); }
     void set_capture_frames(int frames) { m_capture_frames = frames; }
     void set_grass_demo(bool enabled) { m_grass_demo = enabled; }
+    // Splits every frame into UI / sync / scene / ImGui / Present and logs the average.
+    void set_frame_profile(bool enabled) { m_frame_profile = enabled; }
 
     LRESULT handle_message(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -265,6 +267,19 @@ private:
     bool m_grass_demo = false;
     bool capture_backbuffer(const std::string& path);
     void build_grass_demo();
+
+    // Frame profiler (--frame-profile): one sample per frame, five sections.
+    struct FrameSample {
+        float ui = 0.0f;       // ImGui NewFrame + every editor panel
+        float sync = 0.0f;     // scene -> shared buffer
+        float scene = 0.0f;    // EngineContext::update (3D render into the viewport RT)
+        float imgui = 0.0f;    // ImGui::Render + backend draw
+        float present = 0.0f;  // SwapChain::Present
+        float total = 0.0f;
+    };
+    bool m_frame_profile = false;
+    std::vector<FrameSample> m_prof_samples;
+    void report_frame_profile();
 };
 
 } // namespace GM3D::Studio

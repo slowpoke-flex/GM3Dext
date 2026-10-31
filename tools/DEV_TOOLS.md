@@ -67,6 +67,7 @@ The editor can be driven from the command line, which is what most automated che
 | `--frames <n>` | How many frames to render first; default 30. Raise it when terrain or grass must finish building |
 | `--grass-demo` | Enables the terrain, generates the procedural grass field and parks the camera in the densest meadow |
 | `--log <path>` | Appends stdout/stderr to a file; required to see any console output in a release build |
+| `--frame-profile` | Splits every frame into ui / sync / scene / imgui / present and logs the average once per second |
 
 The capture is taken from the swap chain before `Present`, so it matches what the user sees. `--screenshot` implies an exit, which makes it safe to call from a script: the process finishes on its own.
 
