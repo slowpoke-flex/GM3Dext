@@ -119,6 +119,8 @@ void StudioApp::draw_main_menu() {
                 if (!m_selected_entity_ids.empty()) m_selected_entity_id = static_cast<int32_t>(m_selected_entity_ids.back());
             }
             if (ImGui::MenuItem("Deselect All", "Escape", false, !m_selected_entity_ids.empty())) deselect_all();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Settings...")) open_settings();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("GameObject")) {
@@ -153,6 +155,7 @@ void StudioApp::draw_main_menu() {
             ImGui::MenuItem("Inspector", nullptr, &m_show_inspector);
             ImGui::MenuItem("Materials", nullptr, &m_show_materials);
             ImGui::MenuItem("Environment & Lighting", nullptr, &m_show_environment);
+            ImGui::MenuItem("Settings", nullptr, &m_show_settings);
             ImGui::MenuItem("Status Bar", nullptr, &m_show_status_bar);
             ImGui::Separator();
             if (ImGui::MenuItem("Reset Layout to Default")) {

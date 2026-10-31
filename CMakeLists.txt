@@ -112,6 +112,9 @@ set(STUDIO_SOURCES
     tools/studio/StudioSimulation.cpp
     tools/studio/StudioAutomation.cpp
     tools/studio/StudioChrome.cpp
+    tools/studio/StudioSettings.cpp
+    tools/studio/VideoAdapters.cpp
+    tools/studio/VideoAdapters.h
     tools/studio/StudioApp.h
     tools/studio/SceneData.h
     tools/studio/ProjectData.h

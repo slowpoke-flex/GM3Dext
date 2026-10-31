@@ -57,6 +57,7 @@ double EngineContext::initialize(void* buffer_ptr, double buffer_size_bytes, voi
     render_cfg.width = static_cast<uint32_t>(width > 0 ? width : 1280);
     render_cfg.height = static_cast<uint32_t>(height > 0 ? height : 720);
     render_cfg.vsync = true;
+    render_cfg.adapter_index = m_adapter_index;
 
     if (!m_render_world->initialize(render_cfg)) {
         reset_partial_initialization();

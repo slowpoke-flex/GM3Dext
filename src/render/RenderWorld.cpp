@@ -1060,18 +1060,58 @@ bool RenderWorld::init_device_and_swapchain() {
     };
     D3D_FEATURE_LEVEL featureLevel;
 
-    HRESULT hr = D3D11CreateDevice(
-        nullptr,
-        D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        createDeviceFlags,
-        featureLevels,
-        ARRAYSIZE(featureLevels),
-        D3D11_SDK_VERSION,
-        m_device.GetAddressOf(),
-        &featureLevel,
-        m_context.GetAddressOf()
-    );
+    // A specific adapter is only requested by the Studio's Settings panel. When the index no
+    // longer exists (driver removed, laptop undocked) or the device cannot be created on it,
+    // fall back to the default hardware adapter instead of failing to start the editor.
+    ComPtr<IDXGIAdapter1> requested_adapter;
+    if (m_config.adapter_index >= 0) {
+        ComPtr<IDXGIFactory1> enum_factory;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(enum_factory.GetAddressOf())))) {
+            if (FAILED(enum_factory->EnumAdapters1(static_cast<UINT>(m_config.adapter_index),
+                                                   requested_adapter.GetAddressOf()))) {
+                std::cout << "[RenderWorld] Adapter index " << m_config.adapter_index
+                          << " is not available; using the default adapter\n";
+                requested_adapter.Reset();
+            }
+        }
+    }
+
+    HRESULT hr = E_FAIL;
+    if (requested_adapter) {
+        hr = D3D11CreateDevice(
+            requested_adapter.Get(),
+            D3D_DRIVER_TYPE_UNKNOWN,   // mandatory when an explicit adapter is passed
+            nullptr,
+            createDeviceFlags,
+            featureLevels,
+            ARRAYSIZE(featureLevels),
+            D3D11_SDK_VERSION,
+            m_device.GetAddressOf(),
+            &featureLevel,
+            m_context.GetAddressOf()
+        );
+        if (FAILED(hr)) {
+            std::cout << "[RenderWorld] Could not create a device on adapter " << m_config.adapter_index
+                      << " (hr=0x" << std::hex << hr << std::dec << "); using the default adapter\n";
+            m_device.Reset();
+            m_context.Reset();
+        }
+    }
+
+    if (!m_device) {
+        hr = D3D11CreateDevice(
+            nullptr,
+            D3D_DRIVER_TYPE_HARDWARE,
+            nullptr,
+            createDeviceFlags,
+            featureLevels,
+            ARRAYSIZE(featureLevels),
+            D3D11_SDK_VERSION,
+            m_device.GetAddressOf(),
+            &featureLevel,
+            m_context.GetAddressOf()
+        );
+    }
     if (FAILED(hr)) {
         return false;
     }

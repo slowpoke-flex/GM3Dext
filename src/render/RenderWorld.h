@@ -23,6 +23,10 @@ struct RenderConfig {
     uint32_t height = 720;
     bool vsync = true;
     bool debug_validation = false;
+    // DXGI adapter to create the device on, as enumerated by EnumAdapters1. -1 keeps the
+    // previous behaviour (let D3D11 pick the default hardware adapter), which is what the
+    // GameMaker extension always uses.
+    int adapter_index = -1;
 };
 
 // Shader Constant Buffer matching HLSL SceneConstants register(b0)

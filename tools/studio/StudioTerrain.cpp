@@ -287,6 +287,10 @@ void StudioApp::rebuild_terrain() {
             rw->get_grass_system().clear();
             rw->set_grass_enabled(false);
         }
+
+        // The Settings panel's "Show grass" toggle is a preview switch: terrain rebuilds would
+        // otherwise bring the carpet back.
+        if (!m_graphics.show_grass) rw->set_grass_enabled(false);
     } else {
         rw->get_terrain_system().clear(*pw);
         rw->get_grass_system().shutdown();

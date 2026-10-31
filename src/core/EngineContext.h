@@ -114,6 +114,11 @@ public:
     [[nodiscard]] void* get_window_handle() const noexcept { return m_render_world ? m_render_world->get_window_handle() : nullptr; }
     [[nodiscard]] bool is_initialized() const noexcept { return m_is_initialized; }
 
+    // Chooses the DXGI adapter for the NEXT initialize(). Used only by the Studio's settings;
+    // the GML extension never calls it and keeps -1 (default adapter).
+    void set_adapter_index(int index) noexcept { m_adapter_index = index; }
+    [[nodiscard]] int get_adapter_index() const noexcept { return m_adapter_index; }
+
     PhysicsWorld* get_physics_world() noexcept { return m_physics_world.get(); }
     RenderWorld* get_render_world() noexcept { return m_render_world.get(); }
 
@@ -127,6 +132,7 @@ private:
 
     std::mutex m_mutex;
     bool m_is_initialized = false;
+    int m_adapter_index = -1;   // -1 = let D3D11 choose the default hardware adapter
 
     // Pointer to GameMaker shared memory
     uint8_t* m_shared_buffer = nullptr;
