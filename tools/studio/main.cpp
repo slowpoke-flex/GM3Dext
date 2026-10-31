@@ -50,6 +50,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     int capture_frames = 30;
     bool grass_demo = false;
     bool frame_profile = false;
+    bool camera_override = false;
+    float camera_values[6] = {};
+    bool disable_shadows = false;
+    bool disable_grass = false;
     if (arguments) {
         for (int i = 1; i < argument_count; ++i) {
             const std::wstring arg = arguments[i];
@@ -89,8 +93,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                 if (capture_frames < 1) capture_frames = 1;
             } else if (arg == L"--grass-demo") {
                 grass_demo = true;
+            } else if (arg == L"--camera" && i + 1 < argument_count) {
+                // px,py,pz,tx,ty,tz - lets a script reproduce an exact view for screenshots.
+                std::wstring spec(arguments[++i]);
+                float values[6] = {};
+                int parsed = 0;
+                size_t start = 0;
+                while (parsed < 6 && start <= spec.size()) {
+                    const size_t comma = spec.find(L',', start);
+                    const std::wstring token = spec.substr(start, comma == std::wstring::npos ? std::wstring::npos : comma - start);
+                    values[parsed++] = static_cast<float>(_wtof(token.c_str()));
+                    if (comma == std::wstring::npos) break;
+                    start = comma + 1;
+                }
+                if (parsed == 6) {
+                    camera_override = true;
+                    for (int c = 0; c < 6; ++c) camera_values[c] = values[c];
+                }
             } else if (arg == L"--frame-profile") {
                 frame_profile = true;
+            } else if (arg == L"--no-shadows") {
+                disable_shadows = true;
+            } else if (arg == L"--no-grass") {
+                disable_grass = true;
             }
         }
         LocalFree(arguments);
@@ -106,6 +131,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         app.set_capture_frames(capture_frames);
         app.set_grass_demo(grass_demo);
         app.set_frame_profile(frame_profile);
+        if (camera_override) app.set_startup_camera(camera_values);
+        if (disable_shadows) app.set_disable_shadows(true);
+        if (disable_grass) app.set_disable_grass(true);
         if (!app.initialize(hInstance, nCmdShow)) {
             std::cerr << "Failed to initialize GM3D Studio.\n";
             MessageBoxW(nullptr, L"Failed to initialize GM3D Studio!", L"Error", MB_ICONERROR);

@@ -1537,3 +1537,44 @@ The engine's own benchmark number moved from 1.9 ms to 0.37 ms for the same reas
 - `ResizeBuffers` must pass the same flags the chain was created with - the flip chain uses `0`, which is what `RenderWorld::resize` already passes.
 - `NvOptimusEnablement` only affects the process that exports it, so it lives in `tools/studio/main.cpp`, not in the DLL. Inside GameMaker the host executable decides the adapter.
 - The status bar now shows the adapter name next to the FPS, and `[RenderWorld] Adapter:` is printed to the log at startup. Check that line first when a frame-time report looks impossible.
+
+---
+
+## 36. Terrain detail tiling produced pale crawling patches (2026-10-31)
+
+Report and screenshots: large pale patches with straight, triangle-like edges covering the terrain, shimmering whenever the camera moved. They survived `--no-shadows` and disappeared when the detail layer was switched off.
+
+### Root cause
+
+The detail sets are 512 px and were tiled every 2.5 m, which is about **200 texels per metre**. The terrain is normally seen from 1.7 m eye height at a grazing angle; a screen pixel at 30 m covers roughly 7 texels along the view direction and far more across it. The mip chain answers that with a very high mip level, and a 512 px photo at mip 7 is an 8x8 blob - so **every tile became a flat blotch of a slightly different colour**. Because the screen-space derivative jumps from triangle to triangle on a heightfield, the mip transitions land on triangle boundaries, which is why the pattern read as geometry (quads split by a diagonal) rather than as texture.
+
+The 4x4 debug render of `input.UV` (see below) showed a clean gradient, and the baked 256x256 splat weight map dumped to a PPM was smooth, which ruled out both the mesh UVs and the weights.
+
+### Fix
+
+The detail is now only used close up:
+
+```hlsl
+float distToCam  = length(input.WorldPos - CameraPos);
+float detailFade = saturate(1.0 - (distToCam - 10.0) / 25.0);   // full < 10 m, gone at 35 m
+baseColor = lerp(baseColor, detailAlbedo * macroTint, detailFade);
+N = normalize(N + float3(dn.x, 0.0, dn.y) * (0.85 * detailFade));
+```
+
+Inside 35 m the photographs do their job on the ground under the player; beyond that the smooth baked macro albedo (plus fog) carries the surface, which is exactly the band where minification made the detail unreadable anyway. Fading the normal relief with the same factor matters as much as the albedo: at range it was pure normal-map aliasing.
+
+Trade-off to revisit: the far terrain is now back to the flat macro colour. A proper solution is a second, coarser detail scale (or a low-res "macro variation" set) instead of one 200-texel/m set used at every distance.
+
+### Debugging trap found on the way
+
+`--no-grass` and `--no-shadows` were silently ineffective: `StudioApp::sync_scene_to_engine` re-applies `m_scene.grass_enabled` and `m_scene.shadows_enabled` on every frame, so disabling the render world once was undone immediately. Every "no grass" comparison still had grass in it. The flags now clear the scene field as well. Any future A/B switch has to touch the scene state, not just the renderer.
+
+### Debug aids added
+
+| Flag / variable | Use |
+|:---|:---|
+| `--camera px,py,pz,tx,ty,tz` | Reproduce an exact view for a screenshot |
+| `--no-grass` / `--no-shadows` | Isolate layers in a capture |
+| `GM3D_DUMP_SPLAT=1` | Writes `build/splat_dump.ppm` (the terrain weight map) on the first bake |
+
+Temporarily returning a value straight from the pixel shader (`return float4(w.x, w.y, w.z, 1);`) is the quickest way to prove whether a pattern comes from the weights, the albedo or the lighting - but remember that a broken shader still lets the Studio start, so always run `GM3DShaderCheck.exe` after such an experiment.

@@ -279,6 +279,27 @@ bool StudioApp::initialize(HINSTANCE hInstance, int nCmdShow) {
 
     if (m_grass_demo) build_grass_demo();
 
+    if (m_startup_camera_valid) {
+        m_cam_pos[0] = m_startup_camera[0];
+        m_cam_pos[1] = m_startup_camera[1];
+        m_cam_pos[2] = m_startup_camera[2];
+        m_cam_target[0] = m_startup_camera[3];
+        m_cam_target[1] = m_startup_camera[4];
+        m_cam_target[2] = m_startup_camera[5];
+        sync_scene_to_engine();
+    }
+
+    if (m_disable_shadows) {
+        // Same trap as grass: the per-frame sync restores these from the scene.
+        m_scene.shadows_enabled = false;
+        if (auto* rw = EngineContext::instance().get_render_world()) rw->set_shadow_settings(false, 0.0f, 2.0f, 110.0f);
+    }
+    if (m_disable_grass) {
+        // The per-frame sync re-applies m_scene.grass_enabled, so clear it at the source.
+        m_scene.grass_enabled = false;
+        if (auto* rw = EngineContext::instance().get_render_world()) rw->set_grass_enabled(false);
+    }
+
     if (m_bench_stress) build_bench_stress_scene();
 
     if (m_bench_frames > 0) {
@@ -353,8 +374,12 @@ void StudioApp::build_bench_stress_scene() {
     m_history.reset(m_scene);
 }
 
-void StudioApp::build_grass_demo() {
-    auto* rw = EngineContext::instance().get_render_world();
+void StudioApp::set_startup_camera(const float values[6]) {
+    m_startup_camera_valid = true;
+    for (int i = 0; i < 6; ++i) m_startup_camera[i] = values[i];
+}
+
+void StudioApp::build_grass_demo() {    auto* rw = EngineContext::instance().get_render_world();
     if (!rw) return;
     if (!m_scene.has_terrain) {
         m_scene.has_terrain = true;

@@ -426,10 +426,18 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
     // demoted to a large-scale hue tint here (texture ID 5 only).
     // --------------------------------------------------------------------------------------------
     if ((int)input.Param.y == 5) {
+        float distToCam = length(input.WorldPos - CameraPos);
         if (MatPad.x > 0.0) {
             float4 splat = SplatMap.Sample(TextureSampler, input.UV);
             float4 w = max(splat - 0.02, 0.0);
             w /= max(dot(w, 1.0), 0.0001);
+
+            // Detail tiles are ~2.5 m of a 512 px set, about 200 texels per metre. Beyond a
+            // dozen metres that is heavy minification and the mip chain turns every tile into
+            // a blotch, so the terrain reads as a grid of pale patches that crawls with the
+            // camera. Use the detail only close up; further out the baked macro albedo
+            // (smooth, biome coloured) carries the surface.
+            float detailFade = saturate(1.0 - (distToCam - 10.0) / 25.0);
 
             float2 uvTop = input.WorldPos.xz * MatPad.x;
             float topWeight = saturate(N.y * N.y);
@@ -476,29 +484,29 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
             float macroLum = max(dot(baseColor, float3(0.299, 0.587, 0.114)), 0.001);
             float3 macroTint = lerp(float3(1.0, 1.0, 1.0), baseColor / macroLum, 0.55);
             macroTint = lerp(float3(1.0, 1.0, 1.0), macroTint, saturate(w.x + 0.3 * w.z));
-            baseColor = detailAlbedo * macroTint;
+            baseColor = lerp(baseColor, detailAlbedo * macroTint, detailFade);
 
             // Tangent basis of the XZ projection: the map's X follows world X, its Y follows Z.
+            // Relief fades with the colour; at range it is pure aliasing.
             float3 dn = detailNormal * 2.0 - 1.0;
-            N = normalize(N + float3(dn.x, 0.0, dn.y) * 0.85);
+            N = normalize(N + float3(dn.x, 0.0, dn.y) * (0.85 * detailFade));
         } else {
             // No assets on disk: keep the original procedural micro-grain.
-            float distToCam = length(input.WorldPos - CameraPos);
-            float detailFade = saturate(1.0 - (distToCam - 14.0) / 16.0);
-            if (detailFade > 0.01) {
+            float grainFade = saturate(1.0 - (distToCam - 14.0) / 16.0);
+            if (grainFade > 0.01) {
                 float2 microUV = input.WorldPos.xz * 0.65;
                 float d1 = sin(microUV.x * 6.283 + sin(microUV.y * 3.141)) * 0.5 + 0.5;
                 float d2 = cos(microUV.y * 7.539 - sin(microUV.x * 4.188)) * 0.5 + 0.5;
                 float microGrain = (d1 * 0.6 + d2 * 0.4);
 
-                baseColor *= lerp(1.0, 0.94 + 0.12 * microGrain, detailFade);
+                baseColor *= lerp(1.0, 0.94 + 0.12 * microGrain, grainFade);
 
                 float3 dNorm = float3(
                     cos(microUV.x * 6.283) * 0.12,
                     1.0,
                     sin(microUV.y * 7.539) * 0.12
                 );
-                N = normalize(lerp(N, normalize(N + dNorm * 0.25), detailFade));
+                N = normalize(lerp(N, normalize(N + dNorm * 0.25), grainFade));
             }
         }
 
@@ -1901,6 +1909,7 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
             m_texture_manager.has_texture(GM3D::TexId::GRASS) && m_texture_manager.has_texture(GM3D::TexId::ROCK) &&
             m_texture_manager.has_texture(GM3D::TexId::SAND) && m_texture_manager.has_texture(GM3D::TexId::COBBLE)) {
             matProps.pad[0] = 0.40f; // ~2.5 m per detail tile
+
         }
 
         // Presets get real photographs for their dominant surface.
