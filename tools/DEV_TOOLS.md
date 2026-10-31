@@ -17,6 +17,7 @@ Standalone checks after building:
 .\build\GM3DCheck.exe export "C:\path\scene.json" "C:\path\export-folder"
 .\build\GM3DShaderCheck.exe "C:\GM3Dext"
 .\build\GM3DGraphicsSmoke.exe
+.\build\MeshColliderTests.exe
 .\build\GM3DTerrainCheck.exe  # built by check.ps1 -Graphics
 ```
 
@@ -70,6 +71,13 @@ The editor can be driven from the command line, which is what most automated che
 | `--frame-profile` | Splits every frame into ui / sync / scene / imgui / present and logs the average once per second |
 | `--camera px,py,pz,tx,ty,tz` | Sets the camera after the scene is built, for reproducible captures |
 | `--no-grass` / `--no-shadows` | A/B switches that really disable the layer (they also clear the scene flag) |
+| `--simulate <n>` | Starts the Jolt preview at launch, runs `n` frames headless, prints every body's resting transform and exits |
+
+`--simulate` is how collider changes get verified without a screenshot: the `[physics]` line reports how many mesh colliders were built as triangle meshes, convex hulls or box fallbacks, and the `[simulate]` lines report where each body came to rest.
+
+```powershell
+.\build\GM3DStudio.exe --scene tests\fixtures\meshcollider.json --simulate 200 --log build\sim.log
+```
 
 The capture is taken from the swap chain before `Present`, so it matches what the user sees. `--screenshot` implies an exit, which makes it safe to call from a script: the process finishes on its own.
 

@@ -39,8 +39,8 @@ std::vector<Diagnostic> validate_scene(const Scene& scene) {
         if (entity.texture_path.empty() && entity.texture_id >= 6)
             out.push_back({false, "legacy-texture", "Texture has a transient ID without a source path: " + label});
         if (entity.is_point_light && entity.visible) ++active_lights;
-        if (entity.physics_type != 0 && entity.collider_shape == 4)
-            out.push_back({false, "collider", "Mesh collider is not implemented; editor simulation uses a cylinder: " + label});
+        if (entity.physics_type != 0 && entity.collider_shape == 4 && entity.physics_type == 2)
+            out.push_back({false, "collider", "Dynamic mesh colliders use a convex hull of the model, not its exact shape: " + label});
     }
     for (const auto& material : scene.materials) {
         const auto label = "Material " + material.name + " (ID " + std::to_string(material.id) + ")";

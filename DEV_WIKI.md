@@ -1629,3 +1629,71 @@ and the pixel shader keys the terrain path on `matId == -5`. Because the flag an
 - When a bug appears only on some pixels of one draw, the first thing to question is **per-instance data**: it is supposed to be constant, so if behaviour varies per pixel either the attribute is not what you think or the pixel is not from that draw. Rendering the predicate itself as a colour answered the question in one frame.
 - A glossy default material on a large ground plane is a reliable way to produce suspiciously bright artefacts. Ground should have an explicit roughness in the material constants, not a value assigned inside a shader branch.
 - The `--no-grass` / `--no-shadows` / `--camera` flags from section 36 were what made this bisection possible; every dead end above cost one screenshot.
+
+---
+
+## 38. Mesh colliders instead of a cylinder stub (2026-10-31)
+
+Until now the editor's fourth collider shape was a lie: `collider_shape == 4` read "Convex Mesh" in the inspector, but `start_simulation()` clamped the value to `0..3`, so the body was built as a cylinder and `Diagnostics` reported "Mesh collider is not implemented; editor simulation uses a cylinder". This section replaces the stub with real geometry.
+
+### Where the triangles come from
+
+The renderer only kept GPU buffers, so there was no CPU copy to hand to Jolt. `MeshManager` now keeps one:
+
+```cpp
+struct CollisionMesh {
+    std::vector<float> positions;   // three floats per vertex, mesh-local space
+    std::vector<uint32_t> indices;
+};
+```
+
+It is filled inside `create_gpu_mesh()`, which every loader (OBJ, glTF/GLB, built-in primitives, terrain) funnels through, so imports get collision geometry for free. Three details matter:
+
+- **Cap.** `kMaxCollisionTriangles = 400000`. Above that the CPU copy is dropped and the collider falls back to a box; the alternative was silently doubling the memory of a heavy model that is never simulated.
+- **In-place updates.** `update_mesh_vertices()` also rewrites the affected position range, so a sculpted heightfield mesh never leaves a stale copy behind.
+- **`replace_mesh()`** moves the copy along with the GPU mesh; without that, replacing a model would keep the old collider.
+
+### Trimesh or convex hull
+
+`RigidBodyDesc` gained `mesh_positions` / `mesh_vertex_count` / `mesh_indices` / `mesh_index_count`, already in shape-local space, and `PhysicsWorld::create_mesh_shape()` decides what to build from the motion type:
+
+| Body type | Shape | Why |
+|:---|:---|:---|
+| Static / Kinematic | `JPH::MeshShape` (triangle soup) | Level geometry must be exact, including concavity |
+| Dynamic | `JPH::ConvexHullShape` of the same vertices | A triangle soup has no volume, so Jolt cannot derive mass properties from it, and a concave dynamic body tunnels through thin geometry |
+
+`create_body()` gained an optional `MeshColliderKind* out_kind`, which reports `Triangles`, `ConvexHull` or `None`. `None` means the request fell back to a box - no mesh bound, an over-cap mesh, a degenerate mesh, or an unwelded duplicate-only triangle list. The editor counts those and shows "N mesh collider(s) fell back to a box".
+
+The scale convention is the same one the primitive shapes use: `vertex * object_scale * collider_size`. With the default `Collider Size` of 1 the collider coincides with the rendered surface, and dragging the multiplier scales the geometry instead of swapping the shape.
+
+### The one-sided problem
+
+The first version built the trimesh with the model's own winding and objects fell straight through it. Jolt's mesh collisions ignore back faces (`CollideShapeSettings::mBackFaceMode` defaults to `EBackFaceMode::IgnoreBackFaces`), and an arbitrary imported model gives no winding guarantee - a flipped triangle becomes a hole. The fix is to emit every triangle in both windings:
+
+```cpp
+triangles.emplace_back(a, b, c, 0);
+triangles.emplace_back(a, c, b, 0);
+```
+
+This doubles the triangle count of a static collider (which is why the source cap is 400k and not 800k) but removes an entire class of "the floor does not collide" reports that would be impossible to diagnose from the editor.
+
+### Verifying it without eyes
+
+Two new tools, both in the tree:
+
+- `--simulate <n>` starts the Jolt preview at launch, runs `n` frames, logs `[physics] mesh colliders: X trimesh, Y convex hull, Z box fallback` plus a `[simulate]` line with each body's resting transform, then exits.
+- `build\MeshColliderTests.exe` (CTest name `MeshCollider`) drives `PhysicsWorld` directly - no device, no window - and pins the behaviour that matters: a box dropped in the middle of a disc-shaped trimesh rests on it, the same box 2.5 m off-centre falls past it (a bounding-box collider would hold it up), a dynamic mesh body reports `ConvexHull` and lands flush, and both the empty and the degenerate mesh report a fallback instead of creating a broken body.
+
+Studio numbers for the scene in `tests/fixtures/meshcollider.json` (a 4 m cylinder trimesh platform with a drop sphere at y = 8):
+
+| Body | Collider | Resting y |
+|:---|:---|:---|
+| Drop On Cap | box on the trimesh cap | 4.23 (cap at 4.0 + half height) |
+| Drop Past Rim (x = 2.6) | box, disc radius 2 | 0.23 (floor, not the cap) |
+| Convex Hull Drop | dynamic mesh | 0.98 (half of 2 m, flush) |
+
+### Lessons
+
+- A user-facing enum that the code silently clamps is worse than a missing feature: it made a cylinder look like a working mesh collider. The inspector now says "Mesh (Model)" and the tooltip states the static/dynamic rule.
+- Keep the CPU geometry next to the GPU geometry at creation time. Reconstructing it later means reading back from a GPU buffer, which needs a staging copy and only works while the mesh is still resident.
+- Trimesh colliders are one-sided unless the engine says otherwise. If the winding comes from a third party, build both sides.

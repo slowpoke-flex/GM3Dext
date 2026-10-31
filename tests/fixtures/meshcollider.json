@@ -1,0 +1,76 @@
+{
+    "name": "Mesh collider test",
+    "version": 1,
+    "environment": {
+        "sun": { "pitch": 45.0, "yaw": 35.0, "color": [1.0, 0.96, 0.9], "intensity": 2.5 },
+        "shadows": { "enabled": false, "strength": 0.0, "softness": 2.0, "coverage": 110.0 },
+        "ambient": { "color": [0.4, 0.45, 0.5], "intensity": 0.5 },
+        "sky_color": [0.35, 0.5, 0.7],
+        "fog": { "start": 80.0, "end": 300.0 }
+    },
+    "terrain": { "enabled": false },
+    "materials": [],
+    "entities": [
+        {
+            "id": 1,
+            "name": "Grid Floor",
+            "tag": "Default",
+            "editor_grid": true,
+            "transform": {
+                "position": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [240.0, 1.0, 240.0]
+            },
+            "render": { "mesh_id": 3, "material_id": 0, "texture_id": 0, "cast_shadow": false, "visible": true, "param1": 0.0, "param2": 0.0 },
+            "physics": { "type": 1, "shape": 0, "collider_size": [1.0, 1.0, 1.0], "collider_offset": [0.0, 0.0, 0.0], "mass": 1.0, "friction": 0.7, "restitution": 0.0 }
+        },
+        {
+            "id": 2,
+            "name": "Cylinder Platform",
+            "tag": "Default",
+            "transform": {
+                "position": [0.0, 2.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [4.0, 4.0, 4.0]
+            },
+            "render": { "mesh_id": 2, "material_id": 0, "texture_id": 0, "cast_shadow": false, "visible": true, "param1": 0.0, "param2": 0.0 },
+            "physics": { "type": 1, "shape": 4, "collider_size": [1.0, 1.0, 1.0], "collider_offset": [0.0, 0.0, 0.0], "mass": 1.0, "friction": 0.7, "restitution": 0.0 }
+        },
+        {
+            "id": 3,
+            "name": "Drop On Cap",
+            "tag": "Default",
+            "transform": {
+                "position": [1.6, 8.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [0.5, 0.5, 0.5]
+            },
+            "render": { "mesh_id": 0, "material_id": 0, "texture_id": 0, "cast_shadow": false, "visible": true, "param1": 0.0, "param2": 0.0 },
+            "physics": { "type": 2, "shape": 0, "collider_size": [1.0, 1.0, 1.0], "collider_offset": [0.0, 0.0, 0.0], "mass": 2.0, "friction": 0.7, "restitution": 0.0 }
+        },
+        {
+            "id": 4,
+            "name": "Drop Past Rim",
+            "tag": "Default",
+            "transform": {
+                "position": [2.6, 8.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [0.5, 0.5, 0.5]
+            },
+            "render": { "mesh_id": 0, "material_id": 0, "texture_id": 0, "cast_shadow": false, "visible": true, "param1": 0.0, "param2": 0.0 },
+            "physics": { "type": 2, "shape": 0, "collider_size": [1.0, 1.0, 1.0], "collider_offset": [0.0, 0.0, 0.0], "mass": 2.0, "friction": 0.7, "restitution": 0.0 }
+        },
+        {
+            "id": 5,
+            "name": "Convex Hull Drop",
+            "tag": "Default",
+            "transform": {
+                "position": [0.0, 8.0, 6.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [2.0, 2.0, 2.0]
+            },
+            "render": { "mesh_id": 0, "material_id": 0, "texture_id": 0, "cast_shadow": false, "visible": true, "param1": 0.0, "param2": 0.0 },
+            "physics": { "type": 2, "shape": 4, "collider_size": [1.0, 1.0, 1.0], "collider_offset": [0.0, 0.0, 0.0], "mass": 5.0, "friction": 0.7, "restitution": 0.0 }
+        }
+    ]
+}

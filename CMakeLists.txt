@@ -203,5 +203,13 @@ if (BUILD_TESTING)
     target_link_libraries(EngineLifecycleTests PRIVATE GM3Dext)
     add_test(NAME EngineLifecycle COMMAND EngineLifecycleTests)
     set_tests_properties(EngineLifecycle PROPERTIES TIMEOUT 30)
+
+    # Physics only: no device, no window, so the mesh collider can be checked in a plain test run.
+    add_executable(MeshColliderTests tests/MeshColliderTests.cpp src/physics/PhysicsWorld.cpp)
+    target_include_directories(MeshColliderTests PRIVATE src vendor/JoltPhysics)
+    target_compile_definitions(MeshColliderTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(MeshColliderTests PRIVATE Jolt)
+    add_test(NAME MeshCollider COMMAND MeshColliderTests)
+    set_tests_properties(MeshCollider PROPERTIES TIMEOUT 60)
 endif()
 

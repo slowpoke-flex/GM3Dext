@@ -54,6 +54,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     float camera_values[6] = {};
     bool disable_shadows = false;
     bool disable_grass = false;
+    int simulate_frames = 0;
     if (arguments) {
         for (int i = 1; i < argument_count; ++i) {
             const std::wstring arg = arguments[i];
@@ -116,6 +117,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                 disable_shadows = true;
             } else if (arg == L"--no-grass") {
                 disable_grass = true;
+            } else if (arg == L"--simulate" && i + 1 < argument_count) {
+                // Runs the Jolt preview headless: start the simulation, step N frames, print
+                // where every body came to rest, exit. Used to check colliders numerically.
+                simulate_frames = _wtoi(arguments[++i]);
+                if (simulate_frames < 1) simulate_frames = 1;
             }
         }
         LocalFree(arguments);
@@ -134,6 +140,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         if (camera_override) app.set_startup_camera(camera_values);
         if (disable_shadows) app.set_disable_shadows(true);
         if (disable_grass) app.set_disable_grass(true);
+        if (simulate_frames > 0) app.set_simulate_frames(simulate_frames);
         if (!app.initialize(hInstance, nCmdShow)) {
             std::cerr << "Failed to initialize GM3D Studio.\n";
             MessageBoxW(nullptr, L"Failed to initialize GM3D Studio!", L"Error", MB_ICONERROR);
