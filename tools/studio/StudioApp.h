@@ -17,6 +17,7 @@
 #include "ProjectData.h"
 #include "TerrainBrush.h"
 #include "TransformMath.h"
+#include "VideoAdapters.h"
 #include "core/SharedMemory.h"
 
 using Microsoft::WRL::ComPtr;
@@ -58,6 +59,10 @@ public:
     void set_disable_shadows(bool disable) { m_disable_shadows = disable; }
     void set_disable_grass(bool disable) { m_disable_grass = disable; }
     void set_simulate_frames(int frames) { m_simulate_frames = frames; }
+    // --gpu <index>: one-off override of settings.ini's adapter choice.
+    void set_startup_adapter(int index) { m_startup_adapter_override = index; }
+    // --settings: open the Settings panel at launch (used for screenshots and docs).
+    void set_open_settings(bool open) { m_show_settings_at_start = open; }
 
     LRESULT handle_message(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -85,6 +90,7 @@ private:
     bool draw_light_markers(float min_x, float min_y, float width, float height);
     void draw_assets_tab();
     void draw_material_editor_panel();
+    void draw_settings_panel();
 
     // 3D Selection & Mouse Picking
     void pick_entity_at_mouse(float mouseX, float mouseY, float viewportW, float viewportH);
@@ -94,6 +100,25 @@ private:
     // GameMaker LTS Scene & Asset Exporter
     void export_gamemaker_dialog();
     bool export_gamemaker_package(const std::string& export_dir, std::string& out_summary);
+
+    // Persistent editor preferences (settings.ini in %APPDATA%\GM3DStudio).
+    struct GraphicsSettings {
+        int adapter_index = -1;      // DXGI adapter ordinal, -1 = automatic
+        bool vsync = true;
+        int fps_limit = 0;           // 0 = unlimited (vsync still applies)
+        int shadow_override = -1;    // -1 = use the scene, 0 = off, 1..3 = atlas quality
+        bool show_grass = true;      // preview toggle, never written to the scene
+        bool bloom = true;
+        float camera_speed = 18.0f;  // metres per second for the editor fly camera
+    };
+    void load_settings();
+    void save_settings();
+    void apply_graphics_settings();
+    void reset_graphics_settings();
+    void restart_editor();
+    void open_settings() { m_show_settings = true; m_settings_focus = true; }
+    [[nodiscard]] const std::string& settings_path() const { return m_settings_path; }
+    [[nodiscard]] const std::vector<VideoAdapterInfo>& video_adapters() const { return m_video_adapters; }
 
     // Multi-Selection and Hierarchy
     bool is_entity_selected(uint32_t id) const;
@@ -224,6 +249,14 @@ private:
     };
     std::vector<AssetEntry> m_assets;
     ProjectData m_project;
+
+    // Settings (settings.ini) and the adapters enumerated at startup.
+    GraphicsSettings m_graphics;
+    std::vector<VideoAdapterInfo> m_video_adapters;
+    std::string m_settings_path;
+    int m_startup_adapter_override = -2;   // -2 = no --gpu flag
+    int m_applied_adapter_index = -1;      // adapter the current device was created on
+    std::string m_applied_adapter_name;
     float m_asset_poll_timer = 0.0f;
     std::vector<std::wstring> m_dropped_files;
     std::string m_asset_message;
@@ -247,6 +280,9 @@ private:
     bool m_show_environment = true;
     bool m_show_status_bar = true;
     bool m_show_materials = false;
+    bool m_show_settings = false;
+    bool m_settings_focus = false;
+    bool m_show_settings_at_start = false;
     uint32_t m_selected_material_id = 0;
     std::string m_material_diag_title;
     std::string m_material_diag_report;

@@ -106,6 +106,24 @@ bool StudioApp::initialize(HINSTANCE hInstance, int nCmdShow) {
     header->entity_count = 0;
     header->max_entities = 10000;
 
+    // Preferences have to be known before the device exists: the adapter choice is baked into
+    // D3D11CreateDevice. --gpu overrides settings.ini for a single run.
+    load_settings();
+    m_video_adapters = enumerate_video_adapters();
+    if (m_startup_adapter_override != -2) m_graphics.adapter_index = m_startup_adapter_override;
+    if (m_graphics.adapter_index >= 0 &&
+        m_graphics.adapter_index >= static_cast<int>(m_video_adapters.size())) {
+        std::cout << "[Settings] Adapter " << m_graphics.adapter_index
+                  << " is not available (" << m_video_adapters.size()
+                  << " enumerated); falling back to automatic\n";
+        m_graphics.adapter_index = -1;
+    }
+    EngineContext::instance().set_adapter_index(m_graphics.adapter_index);
+    std::cout << "[Settings] " << m_settings_path << " (adapter "
+              << (m_graphics.adapter_index < 0 ? "automatic" : std::to_string(m_graphics.adapter_index))
+              << ", vsync " << (m_graphics.vsync ? "on" : "off")
+              << ", fps limit " << m_graphics.fps_limit << ")\n";
+
     // 4. Initialize EngineContext
     double init_res = EngineContext::instance().initialize(
         m_shared_buffer.data(),
@@ -119,6 +137,12 @@ bool StudioApp::initialize(HINSTANCE hInstance, int nCmdShow) {
         std::cerr << "EngineContext failed to initialize!" << std::endl;
         return false;
     }
+
+    m_applied_adapter_index = m_graphics.adapter_index;
+    if (auto* rw_settings = EngineContext::instance().get_render_world()) {
+        m_applied_adapter_name = rw_settings->get_adapter_name() ? rw_settings->get_adapter_name() : "";
+    }
+    m_cam_speed = m_graphics.camera_speed;
 
     // 5. Pre-allocate initial Viewport Render Texture so it's ready from frame 1
     resize_viewport_texture(1280, 720);
@@ -166,6 +190,11 @@ bool StudioApp::initialize(HINSTANCE hInstance, int nCmdShow) {
     }
 
     if (m_bench_stress) build_bench_stress_scene();
+
+    // Preferences that only need the render world (bloom, grass preview, vsync flag used by
+    // the editor's own Present call) are applied once the scene exists.
+    apply_graphics_settings();
+    if (m_show_settings_at_start) m_show_settings = true;
 
     if (m_simulate_frames > 0) {
         sync_scene_to_engine();
@@ -269,6 +298,11 @@ int StudioApp::run() {
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&lastTime);
 
+    // High-resolution waitable timer for the frame-rate limit. Sleep() rounds up to the
+    // system timer tick (~15.6 ms by default), which turned a 30 FPS cap into 22 FPS.
+    HANDLE frame_timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /*HIGH_RESOLUTION*/,
+                                                TIMER_ALL_ACCESS);
+
     MSG msg{};
     while (m_running) {
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -288,9 +322,32 @@ int StudioApp::run() {
         lastTime = curTime;
         delta_time = std::min(delta_time, 0.05f);
         m_delta_time = delta_time;
+        const LONGLONG frame_start = curTime.QuadPart;
 
         update(delta_time);
         render();
+
+        // Optional frame-rate limit: the editor presents with a sync interval of 0 when vsync
+        // is off, and on a fast GPU that burns a core for nothing. Sleep the remaining time.
+        if (m_graphics.fps_limit > 0 && m_bench_frames == 0) {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            const double elapsed = static_cast<double>(now.QuadPart - frame_start) /
+                                   static_cast<double>(freq.QuadPart);
+            const double target = 1.0 / static_cast<double>(m_graphics.fps_limit);
+            const double remaining_ms = (target - elapsed) * 1000.0;
+            if (remaining_ms > 0.2) {
+                if (frame_timer) {
+                    LARGE_INTEGER due{};
+                    due.QuadPart = -static_cast<LONGLONG>(remaining_ms * 10000.0);
+                    if (SetWaitableTimer(frame_timer, &due, 0, nullptr, nullptr, FALSE)) {
+                        WaitForSingleObject(frame_timer, INFINITE);
+                    }
+                } else {
+                    Sleep(static_cast<DWORD>(remaining_ms));
+                }
+            }
+        }
 
         if (m_bench_frames > 0) {
             ++m_bench_frame;
@@ -301,6 +358,7 @@ int StudioApp::run() {
         }
     }
 
+    if (frame_timer) CloseHandle(frame_timer);
     return static_cast<int>(msg.wParam);
 }
 
@@ -428,8 +486,13 @@ void StudioApp::sync_scene_to_engine() {
                             entity.cast_shadow ? 1.0 : 0.0);
     }
     if (auto* rw = ctx.get_render_world()) {
-        rw->set_shadow_settings(m_scene.shadows_enabled, m_scene.shadow_strength, m_scene.shadow_softness, m_scene.shadow_coverage);
-        rw->set_shadow_quality(m_scene.shadow_quality, m_scene.csm_enabled, m_scene.max_shadow_lights);
+        // Settings can override the scene for preview purposes; the scene file itself (and the
+        // copy exported to GameMaker) keeps the authored values.
+        const bool shadows_enabled = (m_graphics.shadow_override == 0) ? false : m_scene.shadows_enabled;
+        const int shadow_quality = (m_graphics.shadow_override > 0) ? m_graphics.shadow_override
+                                                                    : m_scene.shadow_quality;
+        rw->set_shadow_settings(shadows_enabled, m_scene.shadow_strength, m_scene.shadow_softness, m_scene.shadow_coverage);
+        rw->set_shadow_quality(shadow_quality, m_scene.csm_enabled, m_scene.max_shadow_lights);
         for (const auto& mat : m_scene.materials) {
             MaterialGPU gpuMat{};
             gpuMat.base_color[0] = mat.base_color[0];
@@ -507,6 +570,7 @@ void StudioApp::render() {
     if (m_show_inspector)   draw_inspector_panel();
     if (m_show_materials)   draw_material_editor_panel();
     if (m_show_environment) draw_environment_panel();
+    if (m_show_settings)    draw_settings_panel();
     if (m_show_status_bar)  draw_status_bar();
     if (m_asset_message_pending) { ImGui::OpenPopup("Asset import"); m_asset_message_pending = false; }
     if (ImGui::BeginPopupModal("Asset import", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -598,7 +662,7 @@ void StudioApp::render() {
         m_running = false;
     }
 
-    rw->get_swap_chain()->Present(m_bench_frames > 0 ? 0 : 1, 0);
+    rw->get_swap_chain()->Present(m_bench_frames > 0 || !m_graphics.vsync ? 0 : 1, 0);
     if (prof) {
         sample.present = mark();
         sample.total = sample.ui + sample.sync + sample.scene + sample.imgui + sample.present;

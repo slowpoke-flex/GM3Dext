@@ -2145,3 +2145,59 @@ The installer files it under a folder literally named `??` ("objects"). That was
 `morx/system` in the `.yyp` and in the object's parent path; the bridge still came up
 `bridge_ready` after the rename, so the folder is presentation only. Delete the object, its
 instance layer and the folder entries to ship a project without the harness.
+
+---
+
+## 45. Settings panel: adapter choice, frame pacing and preview overrides (2026-11-01)
+
+The Studio now has *Edit > Settings...* with a small persistent preferences file
+(`%APPDATA%\GM3DStudio\settings.ini`). Scene data stays in the scene file; these are
+user-level knobs and the exporter never sees them.
+
+### The adapter has to be chosen before the device exists
+
+`D3D11CreateDevice` takes the adapter, so switching GPUs at runtime would mean tearing down
+the render world, the asset registry (mesh/texture ids are device objects), ImGui's D3D11
+backend and the viewport render target, then rebuilding all of it from a saved scene. That is
+possible but fragile, and a broken half-switch leaves the editor without a device. The panel
+therefore offers *Restart editor*: it writes the INI, relaunches the same executable with the
+same command line and exits.
+
+Two details the code has to get right:
+
+- `EnumAdapters1` order is the index order; RenderWorld and the panel both use it, so an index
+  in the INI means the same adapter in both places.
+- passing an explicit adapter requires `D3D_DRIVER_TYPE_UNKNOWN`; `HARDWARE` together with an
+  adapter returns `E_INVALIDARG`. If the index disappeared (undocked laptop, driver update) or
+  device creation fails, the renderer logs one line and falls back to the default adapter
+  instead of refusing to start.
+
+### Scene sync overwrites anything applied once
+
+`sync_scene_to_engine` re-applies the scene's shadow settings every frame, and `rebuild_terrain`
+re-decides the grass state. A settings toggle that calls `set_shadow_settings`/`set_grass_enabled`
+once would be reverted on the next frame. Both overrides are therefore applied at the point that
+owns the value: shadows in the per-frame sync (`shadow_override`, -1 = scene), grass at the end
+of `rebuild_terrain` and in the apply function.
+
+### V-Sync lives in the editor's own Present
+
+`RenderWorld::Present` is skipped while the editor renders into a custom render target, so
+`rw->set_vsync()` alone did nothing for the Studio window. The frame is presented by the editor
+with `swap_chain->Present(vsync ? 1 : 0, 0)`.
+
+### Sleep() cannot pace frames
+
+A 30 FPS cap implemented with `Sleep()` measured 22 FPS: the default Windows timer tick is
+~15.6 ms, so a 33 ms sleep turns into 47 ms. The limiter now waits on a
+`CreateWaitableTimerExW(..., CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)` and lands at 33.8 ms
+measured (29.5 FPS), with `Sleep()` as the fallback for pre-1803 systems.
+
+### Verified
+
+- `--gpu 0` -> `NVIDIA GeForce GTX 1060 with Max-Q Design`, `--gpu 1` -> `Intel(R) UHD
+  Graphics 630`; both render the meadow and the status bar reports the new adapter.
+- `--gpu 9` (out of range) -> "Adapter 9 is not available (4 enumerated); falling back to
+  automatic", editor starts on the default adapter.
+- `fps_limit=30, vsync=0` -> 33.85 ms per frame instead of the uncapped rate.
+- `show_grass=0, shadow_override=0` -> carpet and shadows gone, scene untouched.

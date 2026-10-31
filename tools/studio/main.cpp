@@ -55,6 +55,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     bool disable_shadows = false;
     bool disable_grass = false;
     int simulate_frames = 0;
+    int startup_gpu = -2;          // -2 = no --gpu flag, -1 = automatic
+    bool open_settings = false;
     if (arguments) {
         for (int i = 1; i < argument_count; ++i) {
             const std::wstring arg = arguments[i];
@@ -122,6 +124,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                 // where every body came to rest, exit. Used to check colliders numerically.
                 simulate_frames = _wtoi(arguments[++i]);
                 if (simulate_frames < 1) simulate_frames = 1;
+            } else if (arg == L"--gpu" && i + 1 < argument_count) {
+                // -1 = automatic, 0.. = DXGI adapter index (see the Settings panel for the list).
+                startup_gpu = _wtoi(arguments[++i]);
+                if (startup_gpu < -1) startup_gpu = -1;
+            } else if (arg == L"--settings") {
+                open_settings = true;
             }
         }
         LocalFree(arguments);
@@ -141,6 +149,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         if (disable_shadows) app.set_disable_shadows(true);
         if (disable_grass) app.set_disable_grass(true);
         if (simulate_frames > 0) app.set_simulate_frames(simulate_frames);
+        if (startup_gpu != -2) app.set_startup_adapter(startup_gpu);
+        if (open_settings) app.set_open_settings(true);
         if (!app.initialize(hInstance, nCmdShow)) {
             std::cerr << "Failed to initialize GM3D Studio.\n";
             MessageBoxW(nullptr, L"Failed to initialize GM3D Studio!", L"Error", MB_ICONERROR);

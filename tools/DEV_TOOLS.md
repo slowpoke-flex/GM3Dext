@@ -206,6 +206,8 @@ The editor can be driven from the command line, which is what most automated che
 | `--frame-profile` | Splits every frame into ui / sync / scene / imgui / present and logs the average once per second |
 | `--camera px,py,pz,tx,ty,tz` | Sets the camera after the scene is built, for reproducible captures |
 | `--no-grass` / `--no-shadows` | A/B switches that really disable the layer (they also clear the scene flag) |
+| `--gpu <index>` | DXGI adapter for this run (`-1` = automatic); indexes match the Settings panel |
+| `--settings` | Opens the Settings panel at launch (used for documentation screenshots) |
 | `--simulate <n>` | Starts the Jolt preview at launch, runs `n` frames headless, prints every body's resting transform and exits |
 
 `--simulate` is how collider changes get verified without a screenshot: the `[physics]` line reports how many mesh colliders were built as triangle meshes, convex hulls or box fallbacks, and the `[simulate]` lines report where each body came to rest.
