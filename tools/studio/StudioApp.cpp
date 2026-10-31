@@ -302,6 +302,11 @@ bool StudioApp::initialize(HINSTANCE hInstance, int nCmdShow) {
 
     if (m_bench_stress) build_bench_stress_scene();
 
+    if (m_simulate_frames > 0) {
+        sync_scene_to_engine();
+        start_simulation();
+    }
+
     if (m_bench_frames > 0) {
         if (auto* rw_bench = EngineContext::instance().get_render_world()) rw_bench->set_vsync(false);
         m_bench_frame = 0;
@@ -1092,6 +1097,13 @@ void StudioApp::render() {
     if (!m_screenshot_path.empty() && ++m_capture_frame >= std::max(1, m_capture_frames)) {
         capture_backbuffer(m_screenshot_path);
         m_screenshot_path.clear();
+        m_running = false;
+    }
+
+    // --simulate N: run the physics simulation headless for N frames, then print where the
+    // bodies came to rest so a collider can be checked without looking at a picture.
+    if (m_simulate_frames > 0 && ++m_simulate_frame >= m_simulate_frames) {
+        report_simulation();
         m_running = false;
     }
 
@@ -1984,9 +1996,14 @@ void StudioApp::draw_inspector_panel() {
         ImGui::TextUnformatted("Body Type"); ImGui::SetNextItemWidth(-1);
         ImGui::Combo("##BodyType", &sel->physics_type, p_types, IM_ARRAYSIZE(p_types));
 
-        const char* shapes[] = { "Box", "Sphere", "Capsule", "Cylinder", "Convex Mesh" };
+        const char* shapes[] = { "Box", "Sphere", "Capsule", "Cylinder", "Mesh (Model)" };
         ImGui::TextUnformatted("Collider Shape"); ImGui::SetNextItemWidth(-1);
         ImGui::Combo("##Collider", &sel->collider_shape, shapes, IM_ARRAYSIZE(shapes));
+        if (sel->collider_shape == 4) {
+            HelpTooltip("Uses the model's own triangles, scaled by the object's Transform scale and "
+                        "Collider Size. Static and Kinematic bodies collide as a triangle mesh; "
+                        "Dynamic bodies use a convex hull of the same geometry.");
+        }
 
         if (sel->physics_type != 0) {
             ImGui::Spacing();
@@ -3612,6 +3629,40 @@ void StudioApp::draw_collider_bounds(const Entity& entity, const float* view, co
                 prevOk = curOk;
             }
         }
+    } else if (entity.collider_shape == 4) {
+        // Mesh collider: draw the model's local bounds. The real shape is the triangle soup,
+        // so this is the extent of the collider rather than a stand-in primitive.
+        float lo[3] = { -0.5f, -0.5f, -0.5f };
+        float hi[3] = {  0.5f,  0.5f,  0.5f };
+        if (auto* rw = EngineContext::instance().get_render_world()) {
+            if (const GPUMesh* mesh = rw->get_mesh_manager().get_mesh(entity.mesh_id)) {
+                for (int axis = 0; axis < 3; ++axis) {
+                    lo[axis] = mesh->bounds_min[axis];
+                    hi[axis] = mesh->bounds_max[axis];
+                }
+            }
+        }
+        float corners[8][3];
+        for (int i = 0; i < 8; ++i) {
+            const int ax = i & 1, ay = (i >> 1) & 1, az = (i >> 2) & 1;
+            corners[i][0] = (ax ? hi[0] : lo[0]) * sx;
+            corners[i][1] = (ay ? hi[1] : lo[1]) * sy;
+            corners[i][2] = (az ? hi[2] : lo[2]) * sz;
+        }
+        ImVec2 pts[8];
+        bool ok[8];
+        for (int i = 0; i < 8; ++i) ok[i] = Project(corners[i][0], corners[i][1], corners[i][2], pts[i]);
+        const int edges[12][2] = {
+            {0, 1}, {1, 3}, {3, 2}, {2, 0},
+            {4, 5}, {5, 7}, {7, 6}, {6, 4},
+            {0, 4}, {1, 5}, {2, 6}, {3, 7}
+        };
+        const ImU32 meshCol = IM_COL32(120, 210, 255, 210);
+        for (int i = 0; i < 12; ++i) {
+            if (ok[edges[i][0]] && ok[edges[i][1]]) {
+                drawList->AddLine(pts[edges[i][0]], pts[edges[i][1]], meshCol, 1.5f);
+            }
+        }
     } else {
         // Capsule / Cylinder wireframe (top & bottom rings + 4 vertical struts)
         const int kSegs = 20;
@@ -3656,6 +3707,9 @@ void StudioApp::start_simulation() {
     m_simulation_bodies.clear();
     m_simulating = true;
 
+    auto* rw = EngineContext::instance().get_render_world();
+    int mesh_colliders = 0, hull_colliders = 0, mesh_fallbacks = 0;
+
     for (auto& e : m_scene.entities) {
         if (e.is_point_light || e.is_group || e.physics_type == 0 || (m_scene.has_terrain && e.editor_grid)) continue;
 
@@ -3663,7 +3717,7 @@ void StudioApp::start_simulation() {
         ComputeWorldTransform(m_scene, e, wpos, wrot, wscale, wmat);
 
         RigidBodyDesc desc{};
-        desc.shape_type = static_cast<BodyShapeType>(std::clamp(e.collider_shape, 0, 3));
+        desc.shape_type = static_cast<BodyShapeType>(std::clamp(e.collider_shape, 0, 4));
         desc.motion_type = (e.physics_type == 1) ? MotionType::Static :
                            (e.physics_type == 2) ? MotionType::Dynamic : MotionType::Kinematic;
 
@@ -3700,12 +3754,68 @@ void StudioApp::start_simulation() {
             desc.half_height = std::max(0.05f, wscale[1] * csy * 0.5f);
         }
 
+        // Mesh collider: feed the model's own triangles, scaled exactly like the primitive
+        // shapes (object scale times the Collider Size multiplier), so with the default
+        // multiplier the collider coincides with the rendered surface.
+        std::vector<float> mesh_positions;
+        if (e.collider_shape == 4 && !(e.mesh_id == 3 && wscale[0] > 50.0f)) {
+            const CollisionMesh* collision = rw ? rw->get_mesh_manager().get_collision_mesh(e.mesh_id) : nullptr;
+            if (collision && collision->valid()) {
+                mesh_positions.resize(collision->positions.size());
+                for (size_t v = 0; v < collision->vertex_count(); ++v) {
+                    mesh_positions[v * 3 + 0] = collision->positions[v * 3 + 0] * wscale[0] * csx;
+                    mesh_positions[v * 3 + 1] = collision->positions[v * 3 + 1] * wscale[1] * csy;
+                    mesh_positions[v * 3 + 2] = collision->positions[v * 3 + 2] * wscale[2] * csz;
+                }
+                desc.shape_type = BodyShapeType::Mesh;
+                desc.mesh_positions = mesh_positions.data();
+                desc.mesh_vertex_count = collision->vertex_count();
+                desc.mesh_indices = collision->indices.data();
+                desc.mesh_index_count = static_cast<uint32_t>(collision->indices.size());
+            }
+        }
+
         desc.mass = e.mass;
         desc.friction = e.friction;
         desc.restitution = e.restitution;
 
-        e.physics_body_id = pw->create_body(desc);
+        MeshColliderKind mesh_kind = MeshColliderKind::None;
+        e.physics_body_id = pw->create_body(desc, &mesh_kind);
         if (e.physics_body_id) m_simulation_bodies.push_back(e.physics_body_id);
+
+        if (e.collider_shape == 4) {
+            if (mesh_kind == MeshColliderKind::Triangles) ++mesh_colliders;
+            else if (mesh_kind == MeshColliderKind::ConvexHull) ++hull_colliders;
+            else {
+                ++mesh_fallbacks;
+                std::cout << "[physics] mesh collider unavailable for '" << e.name
+                          << "' (mesh " << e.mesh_id << "); using a box\n";
+            }
+        }
+    }
+
+    if (mesh_fallbacks > 0) {
+        m_asset_message = std::to_string(mesh_fallbacks) +
+            " mesh collider(s) fell back to a box: the model has no usable collision geometry.";
+        m_asset_message_pending = true;
+    }
+    if (mesh_colliders + hull_colliders + mesh_fallbacks > 0) {
+        std::cout << "[physics] mesh colliders: " << mesh_colliders << " trimesh, "
+                  << hull_colliders << " convex hull, " << mesh_fallbacks << " box fallback\n";
+    }
+}
+
+void StudioApp::report_simulation() {
+    static const char* kShapeNames[] = { "box", "sphere", "capsule", "cylinder", "mesh" };
+    std::cout << "[simulate] resting state after " << m_simulate_frame << " frames\n";
+    for (const auto& e : m_scene.entities) {
+        if (e.physics_body_id == 0) continue;
+        const char* shape = (e.collider_shape >= 0 && e.collider_shape < 5) ? kShapeNames[e.collider_shape] : "?";
+        const char* body = e.physics_type == 1 ? "static" : (e.physics_type == 2 ? "dynamic" : "kinematic");
+        std::cout << "[simulate] " << body << " '" << e.name << "' mesh=" << e.mesh_id
+                  << " shape=" << shape
+                  << " pos=(" << e.position[0] << ", " << e.position[1] << ", " << e.position[2] << ")"
+                  << " rot=(" << e.rotation[0] << ", " << e.rotation[1] << ", " << e.rotation[2] << ")\n";
     }
 }
 

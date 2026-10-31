@@ -57,6 +57,7 @@ public:
     // A/B switches for visual debugging (--no-shadows, --no-grass).
     void set_disable_shadows(bool disable) { m_disable_shadows = disable; }
     void set_disable_grass(bool disable) { m_disable_grass = disable; }
+    void set_simulate_frames(int frames) { m_simulate_frames = frames; }
 
     LRESULT handle_message(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -274,6 +275,11 @@ private:
     float m_startup_camera[6] = {};
     bool m_disable_shadows = false;
     bool m_disable_grass = false;
+    // --simulate N: start the Jolt simulation at launch, run N frames, print the resting
+    // transforms and exit. Verifies colliders without a pair of eyes on a screenshot.
+    int m_simulate_frames = 0;
+    int m_simulate_frame = 0;
+    void report_simulation();
     bool capture_backbuffer(const std::string& path);
     void build_grass_demo();
 

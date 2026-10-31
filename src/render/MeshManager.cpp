@@ -29,6 +29,7 @@ bool MeshManager::initialize(ID3D11Device* device) {
 
 void MeshManager::shutdown() {
     m_meshes.clear();
+    m_collision_meshes.clear();
 }
 
 const GPUMesh* MeshManager::get_mesh(uint16_t mesh_id) const {
@@ -39,6 +40,11 @@ const GPUMesh* MeshManager::get_mesh(uint16_t mesh_id) const {
     // Fallback to cube if mesh not found
     it = m_meshes.find(0);
     return it != m_meshes.end() ? &it->second : nullptr;
+}
+
+const CollisionMesh* MeshManager::get_collision_mesh(uint16_t mesh_id) const {
+    auto it = m_collision_meshes.find(mesh_id);
+    return it != m_collision_meshes.end() ? &it->second : nullptr;
 }
 
 bool MeshManager::create_gpu_mesh(ID3D11Device* device, uint16_t mesh_id,
@@ -100,6 +106,23 @@ bool MeshManager::create_gpu_mesh(ID3D11Device* device, uint16_t mesh_id,
     hr = device->CreateBuffer(&ibd, &iData, mesh.index_buffer.GetAddressOf());
     if (FAILED(hr)) return false;
 
+    // Keep a CPU copy of the triangles so physics can build a collider from the geometry the
+    // renderer draws instead of approximating it with a primitive. Anything above the cap is
+    // skipped - the editor then reports that the mesh collider fell back to a box.
+    constexpr size_t kMaxCollisionTriangles = 400000;
+    if (indices.size() / 3 <= kMaxCollisionTriangles) {
+        CollisionMesh& collision = m_collision_meshes[mesh_id];
+        collision.positions.resize(vertices.size() * 3);
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            collision.positions[i * 3 + 0] = vertices[i].x;
+            collision.positions[i * 3 + 1] = vertices[i].y;
+            collision.positions[i * 3 + 2] = vertices[i].z;
+        }
+        collision.indices = indices;
+    } else {
+        m_collision_meshes.erase(mesh_id);
+    }
+
     m_meshes[mesh_id] = mesh;
     return true;
 }
@@ -118,8 +141,23 @@ bool MeshManager::update_mesh_vertices(ID3D11DeviceContext* context, uint16_t me
     if (it == m_meshes.end() || !it->second.vertex_buffer) return false;
     if (vertices.size() != it->second.vertex_count) return false;
 
+    // Physics reads the CPU copy, so it has to follow every in-place update (terrain sculpting
+    // rebuilds a slice of the heightfield mesh on each brush stroke).
+    auto sync_collision = [&](uint32_t first, uint32_t count) {
+        auto collision = m_collision_meshes.find(mesh_id);
+        if (collision == m_collision_meshes.end()) return;
+        if (collision->second.positions.size() != vertices.size() * 3) return;
+        const uint32_t end = std::min<uint32_t>(static_cast<uint32_t>(vertices.size()), first + count);
+        for (uint32_t i = first; i < end; ++i) {
+            collision->second.positions[i * 3 + 0] = vertices[i].x;
+            collision->second.positions[i * 3 + 1] = vertices[i].y;
+            collision->second.positions[i * 3 + 2] = vertices[i].z;
+        }
+    };
+
     if (vertex_count == 0 || (start_vertex == 0 && vertex_count >= it->second.vertex_count)) {
         context->UpdateSubresource(it->second.vertex_buffer.Get(), 0, nullptr, vertices.data(), 0, 0);
+        sync_collision(0, it->second.vertex_count);
         // Vertices moved: recompute bounds so culling never clips the new shape.
         it->second.bounds_min[0] = it->second.bounds_max[0] = vertices[0].x;
         it->second.bounds_min[1] = it->second.bounds_max[1] = vertices[0].y;
@@ -154,6 +192,7 @@ bool MeshManager::update_mesh_vertices(ID3D11DeviceContext* context, uint16_t me
     box.front = 0;
     box.back = 1;
     context->UpdateSubresource(it->second.vertex_buffer.Get(), 0, &box, vertices.data() + start_vertex, 0, 0);
+    sync_collision(start_vertex, end_vertex - start_vertex);
     return true;
 }
 
@@ -809,6 +848,15 @@ bool MeshManager::replace_mesh(uint16_t destination, uint16_t source) {
         m_skinned_models.erase(skinned_target);
     }
     m_meshes.erase(incoming);
+
+    // The CPU triangle copy has to move with the GPU mesh or a mesh collider would keep the
+    // geometry that was replaced.
+    m_collision_meshes.erase(destination);
+    auto collision = m_collision_meshes.find(source);
+    if (collision != m_collision_meshes.end()) {
+        m_collision_meshes[destination] = std::move(collision->second);
+        m_collision_meshes.erase(collision);
+    }
     return true;
 }
 

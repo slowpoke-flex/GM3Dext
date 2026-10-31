@@ -181,10 +181,72 @@ void PhysicsWorld::update(float delta_time) {
     }
 }
 
-uint32_t PhysicsWorld::create_body(const RigidBodyDesc& desc) {
+JPH::RefConst<JPH::Shape> PhysicsWorld::create_mesh_shape(const RigidBodyDesc& desc, MeshColliderKind* out_kind) {
+    const uint32_t vertex_count = desc.mesh_vertex_count;
+    uint32_t index_count = desc.mesh_index_count;
+    if (!desc.mesh_positions || vertex_count < 3 || !desc.mesh_indices || index_count < 3) {
+        return nullptr;
+    }
+    index_count -= index_count % 3; // drop a trailing partial triangle
+
+    // Dynamic bodies get a convex hull: a triangle soup has no volume, so Jolt cannot derive
+    // mass properties from it, and a concave dynamic body tunnels through thin geometry.
+    const bool dynamic = desc.motion_type == MotionType::Dynamic;
+
+    if (dynamic) {
+        JPH::Array<JPH::Vec3> points;
+        points.reserve(vertex_count);
+        for (uint32_t i = 0; i < vertex_count; ++i) {
+            points.push_back(JPH::Vec3(desc.mesh_positions[i * 3 + 0],
+                                       desc.mesh_positions[i * 3 + 1],
+                                       desc.mesh_positions[i * 3 + 2]));
+        }
+        JPH::ConvexHullShapeSettings settings(points);
+        JPH::ShapeSettings::ShapeResult result = settings.Create();
+        if (!result.IsValid()) return nullptr;
+        if (out_kind) *out_kind = MeshColliderKind::ConvexHull;
+        return result.Get();
+    }
+
+    JPH::Array<JPH::Float3> vertices;
+    vertices.reserve(vertex_count);
+    for (uint32_t i = 0; i < vertex_count; ++i) {
+        vertices.push_back(JPH::Float3(desc.mesh_positions[i * 3 + 0],
+                                       desc.mesh_positions[i * 3 + 1],
+                                       desc.mesh_positions[i * 3 + 2]));
+    }
+
+    // Out-of-range and degenerate triangles are dropped rather than handed to the BVH. Each
+    // surviving triangle is added in both windings: Jolt's mesh collisions ignore back faces
+    // (CollideShapeSettings defaults to IgnoreBackFaces), and an arbitrary imported model gives
+    // no reliable winding guarantee - a flipped triangle would silently let bodies fall through
+    // the level geometry.
+    JPH::IndexedTriangleList triangles;
+    triangles.reserve((index_count / 3) * 2);
+    for (uint32_t i = 0; i < index_count; i += 3) {
+        const uint32_t a = desc.mesh_indices[i + 0];
+        const uint32_t b = desc.mesh_indices[i + 1];
+        const uint32_t c = desc.mesh_indices[i + 2];
+        if (a >= vertex_count || b >= vertex_count || c >= vertex_count) continue;
+        if (a == b || b == c || a == c) continue;
+        triangles.emplace_back(a, b, c, 0);
+        triangles.emplace_back(a, c, b, 0);
+    }
+    if (triangles.empty()) return nullptr;
+
+    JPH::MeshShapeSettings settings(vertices, triangles);
+    JPH::ShapeSettings::ShapeResult result = settings.Create();
+    if (!result.IsValid()) return nullptr;
+    if (out_kind) *out_kind = MeshColliderKind::Triangles;
+    return result.Get();
+}
+
+uint32_t PhysicsWorld::create_body(const RigidBodyDesc& desc, MeshColliderKind* out_kind) {
     if (!m_initialized || !m_physics_system) {
         return 0;
     }
+
+    if (out_kind) *out_kind = MeshColliderKind::None;
 
     JPH::RefConst<JPH::Shape> shape;
 
@@ -213,6 +275,22 @@ uint32_t PhysicsWorld::create_body(const RigidBodyDesc& desc) {
         float hh = std::max(0.01f, desc.half_height);
         float r = std::max(0.01f, desc.radius);
         shape = new JPH::CylinderShape(hh, r);
+        break;
+    }
+    case BodyShapeType::Mesh: {
+        shape = create_mesh_shape(desc, out_kind);
+        if (!shape) {
+            // No usable geometry (empty mesh, all-degenerate triangles, or an over-cap mesh):
+            // fall back to the box the primitive colliders would have used, so simulation
+            // still runs and the editor can report the substitution.
+            JPH::Vec3 half_extent(
+                std::max(0.01f, desc.half_extents[0]),
+                std::max(0.01f, desc.half_extents[1]),
+                std::max(0.01f, desc.half_extents[2])
+            );
+            shape = new JPH::BoxShape(half_extent);
+            if (out_kind) *out_kind = MeshColliderKind::None;
+        }
         break;
     }
     default:

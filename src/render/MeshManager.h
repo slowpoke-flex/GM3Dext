@@ -44,6 +44,16 @@ struct GPUMesh {
     float bounds_max[3] = {  0.5f,  0.5f,  0.5f };
 };
 
+// CPU copy of a mesh's triangles, kept only so physics can build a collider from the same
+// geometry the renderer draws. Positions are three floats per vertex in mesh-local space.
+struct CollisionMesh {
+    std::vector<float> positions;
+    std::vector<uint32_t> indices;
+
+    [[nodiscard]] bool valid() const { return positions.size() >= 9 && indices.size() >= 3; }
+    [[nodiscard]] uint32_t vertex_count() const { return static_cast<uint32_t>(positions.size() / 3); }
+};
+
 struct GLTFMaterialInfo {
     std::string name;
     float base_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -67,6 +77,8 @@ public:
     void shutdown();
 
     [[nodiscard]] const GPUMesh* get_mesh(uint16_t mesh_id) const;
+    // Triangle soup for a mesh collider, or nullptr for unknown / degenerate meshes.
+    [[nodiscard]] const CollisionMesh* get_collision_mesh(uint16_t mesh_id) const;
     [[nodiscard]] bool is_mesh_skinned(uint16_t mesh_id) const;
     [[nodiscard]] const GM3D::SkinnedModelData* get_skinned_model(uint16_t mesh_id) const;
     [[nodiscard]] uint32_t get_animation_count(uint16_t mesh_id) const;
@@ -101,6 +113,7 @@ public:
 
 private:
     std::unordered_map<uint16_t, GPUMesh> m_meshes;
+    std::unordered_map<uint16_t, CollisionMesh> m_collision_meshes;
     std::unordered_map<uint16_t, GM3D::SkinnedModelData> m_skinned_models;
     uint16_t m_next_custom_mesh_id = 100;
 

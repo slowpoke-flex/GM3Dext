@@ -17,6 +17,9 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Geometry/IndexedTriangle.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -68,7 +71,17 @@ enum class BodyShapeType : uint32_t {
     Box = 0,
     Sphere = 1,
     Capsule = 2,
-    Cylinder = 3
+    Cylinder = 3,
+    Mesh = 4
+};
+
+// How a Mesh request was actually built: static/kinematic bodies get the triangle soup,
+// dynamic ones get a convex hull of the same vertices (a concave body cannot supply mass
+// properties and tunnels through thin geometry).
+enum class MeshColliderKind : uint32_t {
+    None = 0,
+    Triangles = 1,
+    ConvexHull = 2
 };
 
 enum class MotionType : uint32_t {
@@ -90,6 +103,13 @@ struct RigidBodyDesc {
     float restitution = 0.3f;
     float linear_damping = 0.05f;
     float angular_damping = 0.05f;
+
+    // Mesh shape source. Positions are three floats per vertex, both arrays already in
+    // shape-local (body) space, so the caller applies the object scale and the collider offset.
+    const float* mesh_positions = nullptr;
+    uint32_t mesh_vertex_count = 0;
+    const uint32_t* mesh_indices = nullptr;
+    uint32_t mesh_index_count = 0;
 };
 
 struct RaycastHitResult {
@@ -116,7 +136,8 @@ public:
     void shutdown();
     void update(float delta_time);
 
-    uint32_t create_body(const RigidBodyDesc& desc);
+    // out_kind (optional) reports how a Mesh collider was built, or None when it fell back.
+    uint32_t create_body(const RigidBodyDesc& desc, MeshColliderKind* out_kind = nullptr);
     uint32_t create_heightfield_body(float px, float py, float pz, float world_size, uint32_t sample_count, const float* heights);
     bool destroy_body(uint32_t body_id);
 
@@ -165,4 +186,7 @@ private:
     std::unordered_map<uint32_t, uint32_t>    m_body_to_id;
     std::unordered_map<uint32_t, BodyHistory> m_body_history;
     uint32_t m_next_handle_id = 1;
+
+    // Builds a triangle-soup or convex-hull shape from RigidBodyDesc::mesh_*, or nullptr.
+    JPH::RefConst<JPH::Shape> create_mesh_shape(const RigidBodyDesc& desc, MeshColliderKind* out_kind);
 };
