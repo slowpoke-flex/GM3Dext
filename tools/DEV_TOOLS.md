@@ -112,6 +112,43 @@ node tools\gamemaker-mcp\src\cli.js search "buffer_write"
 
 **Local patch.** Upstream guards its entry point with `if (import.meta.url === \`file://${process.argv[1]}\`)`, which never matches on Windows: `process.argv[1]` is a backslash path with no `file://` prefix. `main()` was therefore never called, the process idled on stdin and never answered MCP `initialize` - the server looked "connected but useless" in every Windows client. `src/gamemaker-docs-server.js` now builds a file URL for the comparison. Re-apply that edit if the package is ever updated from npm.
 
+## MCP servers installed machine-wide
+
+`%USERPROFILE%\.config\opencode\opencode.json` registers five servers for every OpenCode session, not just this repository. The GML manual server above stays project-local because the markdown tree lives in this checkout.
+
+| Server | Kind | Tools | Purpose |
+|:---|:---|---:|:---|
+| `microsoft-learn` | remote | 3 | Official D3D11/DXGI/Win32/HLSL documentation. No key. |
+| `context7` | remote | 2 | Current docs/examples for libraries (cgltf, Jolt, ImGui). Free tier, rate-limited without a key. |
+| `deepwiki` | remote | 3 | `ask_wiki_question` / `read_wiki_*` over a GitHub repo. Useful for reading Jolt or cgltf instead of guessing. |
+| `gamemaker` | local | 22 of 225 | Project-aware GameMaker tooling: validation, static analysis, guarded edits. Read-only by default. |
+| `renderdoc` | local | 15 | GPU frame capture analysis: draw calls, shader source and constant buffers, texture pixels, pipeline state. |
+
+Check them all with `opencode mcp list` (six lines including `gamemaker-docs`). Run it twice if `renderdoc` reports `pending` - the Python server needs a few seconds to answer `initialize`.
+
+### gamemaker
+
+`npm install -g gamemaker-mcp@latest` installs version 2.0.0 (MIT). Two things are configured around it:
+
+- **Pinned project.** It auto-detects the `.yyp` of the workspace, which in a session opened at `C:\GM3Dext-SDF` binds it to the frozen checkout. `GAMEMAKER_PROJECT` is pinned to `C:\GM3Dext\3DTEST\3DTEST.yyp` instead, with `GAMEMAKER_MCP_MODE=read-only` and `GAMEMAKER_MCP_ALLOW_BUILD=0`.
+- **Tool filter.** The server registers 225 tools, most of them one-off GML generators (dungeon builders, CRT shaders, inventory drag-and-drop UI). `%USERPROFILE%\.config\opencode\mcp\gamemaker-filter.mjs` is a transparent stdio proxy that republishes 22 of them and rejects calls to the rest. The allowlist is `DEFAULT_TOOLS` in that file or the `GM_TOOLS` environment variable (comma separated):
+
+  project introspection (`gm_project_info`, `gm_project_validate`, `gm_project_statistics`, `gm_project_health_score`, `gm_asset_list`, `gm_asset_read`, `gm_file_read`, `gm_code_search`, `gm_runtime_detect`), static analysis (`gm_gml_analyze`, `gm_gml_validate_snippet`, `gm_shader_analyze`, `gm_symbol_references`, `gm_asset_find_references`, `gm_draw_state_audit`, `gm_gml_profile_check`, `gm_gml_dead_code_detect`, `gm_dependency_graph`), build/edit (`gm_project_compile_errors`, `gm_job_status`, `gm_gml_patch_preview`, `gm_gml_patch`).
+
+  Editing needs `GAMEMAKER_MCP_MODE=workspace-write`; compiling additionally needs `GAMEMAKER_MCP_ALLOW_BUILD=1`. Change the map in `opencode.json`, not in the server.
+
+### renderdoc
+
+```powershell
+winget install --id BaldurKarlsson.RenderDoc --exact --silent
+git clone https://github.com/halby24/RenderDocMCP C:\GameDev\tools\renderdoc-mcp
+cd C:\GameDev\tools\renderdoc-mcp
+uv tool install .
+python scripts\install_extension.py
+```
+
+The extension lands in `%APPDATA%\qrenderdoc\extensions\renderdoc_mcp_bridge`. Enable it once in RenderDoc under **Tools > Manage Extensions > RenderDoc MCP Bridge**; the server talks to the open RenderDoc instance over `127.0.0.1:19876`, so with RenderDoc closed every tool returns "Cannot connect to RenderDoc MCP Bridge" - that is the expected state, not a broken install.
+
 ## Scene capture and startup automation
 
 The editor can be driven from the command line, which is what most automated checks use:
