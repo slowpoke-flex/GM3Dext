@@ -34,3 +34,6 @@ scratch/
 *.log
 *.bak
 *.cache
+
+# Nested tool repository, not part of the engine
+.agents/antigravity-computer-use/
