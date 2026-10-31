@@ -1,8 +1,8 @@
 # Build output and binaries
-build/
-bin/
-obj/
-out/
+/build/
+/bin/
+/obj/
+/out/
 *.exe
 *.dll
 *.lib
