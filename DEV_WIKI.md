@@ -2092,3 +2092,16 @@ it, otherwise orbiting on a hill puts the near plane inside the ground.
 Note for automated checks: the cursor is warped to the window centre, so a synthetic
 `send_game_mouse` drag cannot exercise mouse-look (the synthetic cursor never actually moves).
 That one has to be tried by hand.
+
+### Re-centring the cursor every frame does not work
+
+The first mouse-look implementation warped the cursor to the window centre each frame and used
+`mouse - centre` as the delta. That is the usual advice, and it is wrong here: the warp only
+lands where asked when the window is 1:1 and focused. Otherwise the residual offset is a
+*constant* delta applied every frame - the camera rotates on its own, and the body, which
+chases `cam_yaw`, spins and shakes. It also made the pitch look inverted, because the vertical
+readout was as garbage as the horizontal one.
+
+Deltas from the previous cursor position fixed it; the cursor is only re-centred when it
+reaches 48 px from the window edge, where deltas would stop. A synthetic right click now
+leaves `cam_yaw` exactly where it was, which is the regression test for this bug.
