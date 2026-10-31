@@ -2132,3 +2132,16 @@ While in there, the facing rules were brought a little closer to the real game: 
 longer swings the body back to the camera heading, and only the right mouse button turns the
 body while standing still. Backpedal and pure strafe still keep the body on the camera
 heading, forward plus strafe aims at the diagonal.
+
+### The Chinese folder in the project tree
+
+`MeadowDemo` contains `sys_morx_runtime` - the automation bridge installed by the
+`gamemaker-run` MCP (object, a `MORX_Runtime` instance layer in Room1, and a folder entry in
+the `.yyp`). The bridge lives in the save area: without `morx_mcp/session.json` (and a matching
+token) its Create event destroys the instance on the first frame, so a normal build or an IDE
+run ignores it completely.
+
+The installer files it under a folder literally named `??` ("objects"). That was renamed to
+`morx/system` in the `.yyp` and in the object's parent path; the bridge still came up
+`bridge_ready` after the rename, so the folder is presentation only. Delete the object, its
+instance layer and the folder entries to ship a project without the harness.

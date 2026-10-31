@@ -12,7 +12,7 @@
   "overriddenProperties":[],
   "parent":{
     "name":"system",
-    "path":"folders/物体/system.yy",
+    "path":"folders/morx/system.yy",
   },
   "parentObjectId":null,
   "persistent":true,
