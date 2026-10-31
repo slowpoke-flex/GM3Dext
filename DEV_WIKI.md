@@ -2105,3 +2105,30 @@ readout was as garbage as the horizontal one.
 Deltas from the previous cursor position fixed it; the cursor is only re-centred when it
 reaches 48 px from the window edge, where deltas would stop. A synthetic right click now
 leaves `cam_yaw` exactly where it was, which is the regression test for this bug.
+
+### angle_difference arguments are (from, to) - not (a, b) the way you expect
+
+Holding W+D made the character spin and shake. The facing code eased the body towards the
+movement direction with:
+
+```gml
+char_yaw += clamp(angle_difference(char_yaw, _desired), -720 * _dt, 720 * _dt);   // WRONG
+```
+
+GameMaker's `angle_difference(a, b)` returns `a - b` normalised - it is the delta that takes
+*b* to *a*, so this expression asks for "the way back from the target", and the error grows
+instead of shrinking. The body rotates away from the movement vector at 720 deg/s, wraps at
+360 and starts again: a continuous spin that reads as violent shaking. Walking straight was
+unaffected because there the target equals the current heading and the error is zero. The same
+sign error was behind the earlier "right mouse turns the character towards the camera" report:
+the body chased `cam_yaw` backwards.
+
+Measured before the fix: 120 sign reversals in 170 frames while holding W+D, `char_yaw` ended
+at -154 deg with the target at +72 deg. After the fix the body moves 200 -> 245 deg once and
+stays there. `angle_difference(0, 90)` returns `-90`, `angle_difference(90, 0)` returns `90`,
+which is the cheap probe if this ever comes up again.
+
+While in there, the facing rules were brought a little closer to the real game: stopping no
+longer swings the body back to the camera heading, and only the right mouse button turns the
+body while standing still. Backpedal and pure strafe still keep the body on the camera
+heading, forward plus strafe aims at the diagonal.
