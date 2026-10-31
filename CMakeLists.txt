@@ -100,6 +100,18 @@ set(IMGUI_SOURCES
 set(STUDIO_SOURCES
     tools/studio/main.cpp
     tools/studio/StudioApp.cpp
+    tools/studio/StudioShared.h
+    tools/studio/StudioInspector.cpp
+    tools/studio/StudioMaterials.cpp
+    tools/studio/StudioEnvironment.cpp
+    tools/studio/StudioOutliner.cpp
+    tools/studio/StudioViewport.cpp
+    tools/studio/StudioAssets.cpp
+    tools/studio/StudioSceneFiles.cpp
+    tools/studio/StudioTerrain.cpp
+    tools/studio/StudioSimulation.cpp
+    tools/studio/StudioAutomation.cpp
+    tools/studio/StudioChrome.cpp
     tools/studio/StudioApp.h
     tools/studio/SceneData.h
     tools/studio/ProjectData.h
