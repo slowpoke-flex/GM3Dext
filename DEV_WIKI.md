@@ -2066,3 +2066,29 @@ looks right. Use `other.player = id;`.
 
 The same rule bit the reference search for the character: scene entities are `obj_3d_entity`
 instances whose `mesh_id` is below 100 for engine primitives and 100+ for loaded models.
+
+### WoW-style bindings (second pass)
+
+The first controller was camera-relative but read like a tech demo: instant speed, the body
+snapped to the movement vector, and S turned the character around. The bindings now follow
+WoW's defaults:
+
+| Input | Behaviour |
+|:---|:---|
+| `W` / `S` | forward 4.4 m/s, backpedal 4.1 m/s **facing forward** |
+| `A`/`D`, `Q`/`E` | strafe, body keeps facing the camera |
+| `Shift` | run 7.2 m/s |
+| `Space` | hop (6.2 m/s up, 18 m/s^2 gravity) |
+| right mouse | turns camera **and** body; cursor captured, hidden and recentred every frame |
+| wheel | zoom 2..14 m |
+| `1` | take control, camera snaps behind the character |
+
+Two details that carry most of the "feel": speed eased at 14/s instead of switching instantly,
+and the body yaw interpolated at 720 deg/s towards the target instead of snapping - forward
+plus strafe aims at the diagonal, while backpedal and pure strafe keep the body on the camera
+heading so the character slides sideways. The camera is also pushed above the terrain under
+it, otherwise orbiting on a hill puts the near plane inside the ground.
+
+Note for automated checks: the cursor is warped to the window centre, so a synthetic
+`send_game_mouse` drag cannot exercise mouse-look (the synthetic cursor never actually moves).
+That one has to be tried by hand.
