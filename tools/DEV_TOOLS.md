@@ -89,6 +89,29 @@ At runtime `TextureManager::find_asset_dir` resolves the folder in this order:
 
 CMake copies the folder next to `GM3DStudio.exe` after every build. If no folder is found the engine logs one line and falls back to the built-in procedural textures, so `GM3Dext.dll` still runs inside a GameMaker project without any assets.
 
+## GameMaker documentation MCP
+
+`tools/gamemaker-mcp/` is a vendored copy of `@petah/gamemaker-mcp`: a Model Context Protocol server over the GameMaker manual (3072 tracked files, the markdown lives in `md/`). It is documentation only - it cannot open the IDE, build a project or send input - but it answers GML API questions from the same manual the editor's help refers to.
+
+`opencode.json` at the repository root registers it, so any OpenCode session in this repository gets these tools:
+
+| Tool | Purpose |
+|:---|:---|
+| `lookup_gamemaker_function` | Function reference by name (`function_name`) |
+| `search_gamemaker_docs` | Free-text search over the manual (`query`) |
+| `list_functions_by_category` | All functions of a category |
+| `get_markdown_file` | One manual page as markdown (`file_path`) |
+| `init_gamemaker_agent` | The bundled overview/instructions, `init.txt` |
+
+Check the connection with `opencode mcp list` (expects `✓ gamemaker-docs connected`). The CLI works too, without OpenCode:
+
+```powershell
+node tools\gamemaker-mcp\src\cli.js lookup keyboard_check_pressed
+node tools\gamemaker-mcp\src\cli.js search "buffer_write"
+```
+
+**Local patch.** Upstream guards its entry point with `if (import.meta.url === \`file://${process.argv[1]}\`)`, which never matches on Windows: `process.argv[1]` is a backslash path with no `file://` prefix. `main()` was therefore never called, the process idled on stdin and never answered MCP `initialize` - the server looked "connected but useless" in every Windows client. `src/gamemaker-docs-server.js` now builds a file URL for the comparison. Re-apply that edit if the package is ever updated from npm.
+
 ## Scene capture and startup automation
 
 The editor can be driven from the command line, which is what most automated checks use:
