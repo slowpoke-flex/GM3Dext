@@ -76,6 +76,10 @@ Texture2D DetailGrassN : register(t8);
 Texture2D DetailRockN : register(t9);
 Texture2D DetailSandN : register(t10);
 Texture2D DetailCobbleN : register(t11);
+Texture2D DetailGrassR : register(t12);
+Texture2D DetailRockR : register(t13);
+Texture2D DetailSandR : register(t14);
+Texture2D DetailCobbleR : register(t15);
 SamplerComparisonState ShadowSampler : register(s0);
 SamplerState TextureSampler : register(s1);
 
@@ -431,69 +435,87 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
     // sparkling specular shards. Roughness is also pinned here, in the material constants.
     if (matId == -5) {
         float distToCam = length(input.WorldPos - CameraPos);
+        // Matte soil, scree and bedrock is the baseline; the CC0 roughness maps modulate it
+        // near the camera and it fades back to this constant at range.
+        float terrainRoughness = 0.85;
         if (MatPad.x > 0.0) {
-            float4 splat = SplatMap.Sample(TextureSampler, input.UV);
-            float4 w = max(splat - 0.02, 0.0);
-            w /= max(dot(w, 1.0), 0.0001);
-
             // Detail tiles are ~2.5 m of a 512 px set, about 200 texels per metre. Beyond a
             // dozen metres that is heavy minification and the mip chain turns every tile into
             // a blotch, so the terrain reads as a grid of pale patches that crawls with the
             // camera. Use the detail only close up; further out the baked macro albedo
-            // (smooth, biome coloured) carries the surface.
+            // (smooth, biome coloured) carries the surface. The fade is also a hard gate: far
+            // terrain is most of a landscape view, and skipping the whole block there saves
+            // eight to sixteen texture fetches on every one of those pixels.
             float detailFade = saturate(1.0 - (distToCam - 10.0) / 25.0);
+            if (detailFade <= 0.001) detailFade = 0.0;
+            if (detailFade > 0.0) {
+                float4 splat = SplatMap.Sample(TextureSampler, input.UV);
+                float4 w = max(splat - 0.02, 0.0);
+                w /= max(dot(w, 1.0), 0.0001);
 
-            float2 uvTop = input.WorldPos.xz * MatPad.x;
-            float topWeight = saturate(N.y * N.y);
+                float2 uvTop = input.WorldPos.xz * MatPad.x;
+                float topWeight = saturate(N.y * N.y);
 
             // Photographs are sRGB encoded; the pipeline works in linear space.
-            float3 gT = DetailGrass.Sample(TextureSampler, uvTop).rgb;
-            float3 rT = DetailRock.Sample(TextureSampler, uvTop).rgb;
-            float3 sT = DetailSand.Sample(TextureSampler, uvTop).rgb;
-            float3 cT = DetailCobble.Sample(TextureSampler, uvTop).rgb;
-            float3 albedoTop = gT * gT * w.x + rT * rT * w.y + sT * sT * w.z + cT * cT * w.w;
+                float3 gT = DetailGrass.Sample(TextureSampler, uvTop).rgb;
+                float3 rT = DetailRock.Sample(TextureSampler, uvTop).rgb;
+                float3 sT = DetailSand.Sample(TextureSampler, uvTop).rgb;
+                float3 cT = DetailCobble.Sample(TextureSampler, uvTop).rgb;
+                float3 albedoTop = gT * gT * w.x + rT * rT * w.y + sT * sT * w.z + cT * cT * w.w;
 
-            float3 normalTop = DetailGrassN.Sample(TextureSampler, uvTop).rgb * w.x
-                             + DetailRockN.Sample(TextureSampler, uvTop).rgb * w.y
-                             + DetailSandN.Sample(TextureSampler, uvTop).rgb * w.z
-                             + DetailCobbleN.Sample(TextureSampler, uvTop).rgb * w.w;
+                float3 normalTop = DetailGrassN.Sample(TextureSampler, uvTop).rgb * w.x
+                                 + DetailRockN.Sample(TextureSampler, uvTop).rgb * w.y
+                                 + DetailSandN.Sample(TextureSampler, uvTop).rgb * w.z
+                                 + DetailCobbleN.Sample(TextureSampler, uvTop).rgb * w.w;
 
-            float3 detailAlbedo = albedoTop;
-            float3 detailNormal = normalTop;
+                float3 detailAlbedo = albedoTop;
+                float3 detailNormal = normalTop;
 
-            // Steep faces smear a top-down projection, so fall back to a side projection.
-            // Flat ground never pays for it, which is the overwhelming majority of pixels.
-            if (topWeight < 0.80) {
-                float2 uvSide = (abs(N.x) > abs(N.z)) ? input.WorldPos.zy * MatPad.x
-                                                      : input.WorldPos.xy * MatPad.x;
-                float3 gS = DetailGrass.Sample(TextureSampler, uvSide).rgb;
-                float3 rS = DetailRock.Sample(TextureSampler, uvSide).rgb;
-                float3 sS = DetailSand.Sample(TextureSampler, uvSide).rgb;
-                float3 cS = DetailCobble.Sample(TextureSampler, uvSide).rgb;
-                float3 albedoSide = gS * gS * w.x + rS * rS * w.y + sS * sS * w.z + cS * cS * w.w;
+                // Steep faces smear a top-down projection, so fall back to a side projection.
+                // Flat ground never pays for it, which is the overwhelming majority of pixels.
+                if (topWeight < 0.80) {
+                    float2 uvSide = (abs(N.x) > abs(N.z)) ? input.WorldPos.zy * MatPad.x
+                                                          : input.WorldPos.xy * MatPad.x;
+                    float3 gS = DetailGrass.Sample(TextureSampler, uvSide).rgb;
+                    float3 rS = DetailRock.Sample(TextureSampler, uvSide).rgb;
+                    float3 sS = DetailSand.Sample(TextureSampler, uvSide).rgb;
+                    float3 cS = DetailCobble.Sample(TextureSampler, uvSide).rgb;
+                    float3 albedoSide = gS * gS * w.x + rS * rS * w.y + sS * sS * w.z + cS * cS * w.w;
 
-                float3 normalSide = DetailGrassN.Sample(TextureSampler, uvSide).rgb * w.x
-                                  + DetailRockN.Sample(TextureSampler, uvSide).rgb * w.y
-                                  + DetailSandN.Sample(TextureSampler, uvSide).rgb * w.z
-                                  + DetailCobbleN.Sample(TextureSampler, uvSide).rgb * w.w;
+                    float3 normalSide = DetailGrassN.Sample(TextureSampler, uvSide).rgb * w.x
+                                      + DetailRockN.Sample(TextureSampler, uvSide).rgb * w.y
+                                      + DetailSandN.Sample(TextureSampler, uvSide).rgb * w.z
+                                      + DetailCobbleN.Sample(TextureSampler, uvSide).rgb * w.w;
 
-                float sideBlend = smoothstep(0.80, 0.45, topWeight);
-                detailAlbedo = lerp(albedoTop, albedoSide, sideBlend);
-                detailNormal = lerp(normalTop, normalSide, sideBlend);
+                    float sideBlend = smoothstep(0.80, 0.45, topWeight);
+                    detailAlbedo = lerp(albedoTop, albedoSide, sideBlend);
+                    detailNormal = lerp(normalTop, normalSide, sideBlend);
+                }
+
+                // Keep the biome hue, drop the biome brightness: the photograph owns the detail.
+                // The tint only follows the grass/sand layers, otherwise the stone plaza and the
+                // cliff faces pick up a green cast from the meadow palette.
+                float macroLum = max(dot(baseColor, float3(0.299, 0.587, 0.114)), 0.001);
+                float3 macroTint = lerp(float3(1.0, 1.0, 1.0), baseColor / macroLum, 0.55);
+                macroTint = lerp(float3(1.0, 1.0, 1.0), macroTint, saturate(w.x + 0.3 * w.z));
+                baseColor = lerp(baseColor, detailAlbedo * macroTint, detailFade);
+
+                // Authored roughness of the same four sets, blended by the same weights. It is a
+                // scalar, so the top projection is used even on cliffs: on a grayscale map the
+                // projected distortion is invisible, which saves four texture fetches on the
+                // steep pixels that need them most. The 0.30 floor keeps the smoothest texel of
+                // a photograph from turning the ground into a mirror at grazing angles.
+                float roughDetail = DetailGrassR.Sample(TextureSampler, uvTop).r * w.x
+                                  + DetailRockR.Sample(TextureSampler, uvTop).r * w.y
+                                  + DetailSandR.Sample(TextureSampler, uvTop).r * w.z
+                                  + DetailCobbleR.Sample(TextureSampler, uvTop).r * w.w;
+                terrainRoughness = lerp(0.85, clamp(roughDetail, 0.30, 1.0), detailFade);
+
+                // Tangent basis of the XZ projection: the map's X follows world X, its Y follows Z.
+                // Relief fades with the colour; at range it is pure aliasing.
+                float3 dn = detailNormal * 2.0 - 1.0;
+                N = normalize(N + float3(dn.x, 0.0, dn.y) * (0.85 * detailFade));
             }
-
-            // Keep the biome hue, drop the biome brightness: the photograph owns the detail.
-            // The tint only follows the grass/sand layers, otherwise the stone plaza and the
-            // cliff faces pick up a green cast from the meadow palette.
-            float macroLum = max(dot(baseColor, float3(0.299, 0.587, 0.114)), 0.001);
-            float3 macroTint = lerp(float3(1.0, 1.0, 1.0), baseColor / macroLum, 0.55);
-            macroTint = lerp(float3(1.0, 1.0, 1.0), macroTint, saturate(w.x + 0.3 * w.z));
-            baseColor = lerp(baseColor, detailAlbedo * macroTint, detailFade);
-
-            // Tangent basis of the XZ projection: the map's X follows world X, its Y follows Z.
-            // Relief fades with the colour; at range it is pure aliasing.
-            float3 dn = detailNormal * 2.0 - 1.0;
-            N = normalize(N + float3(dn.x, 0.0, dn.y) * (0.85 * detailFade));
         } else {
             // No assets on disk: keep the original procedural micro-grain.
             float grainFade = saturate(1.0 - (distToCam - 14.0) / 16.0);
@@ -515,7 +537,7 @@ float4 PS_Main(PS_INPUT input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET {
         }
 
         // Natural dielectric mineral terrain PBR response (matte soil, scree and bedrock)
-        roughness = 0.85;
+        roughness = terrainRoughness;
         metallic = 0.01;
     }
 
@@ -2260,12 +2282,12 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
     ID3D11SamplerState* samplers[] = { m_shadow_sampler.Get(), m_texture_manager.get_sampler() };
     m_context->PSSetSamplers(0, 2, samplers);
 
-    // Terrain detail blend: splat weights at t3, four albedo sets at t4..t7 and their
-    // normal maps at t8..t11. Bound as one contiguous block; only the terrain shader
-    // path reads them.
+    // Terrain detail blend: splat weights at t3, four albedo sets at t4..t7, their normal
+    // maps at t8..t11 and their roughness maps at t12..t15. Bound as one contiguous block;
+    // only the terrain shader path reads them.
     {
         const uint16_t detail_ids[4] = { GM3D::TexId::GRASS, GM3D::TexId::ROCK, GM3D::TexId::SAND, GM3D::TexId::COBBLE };
-        ID3D11ShaderResourceView* detail_srvs[9] = {
+        ID3D11ShaderResourceView* detail_srvs[13] = {
             m_terrain_system.get_detail_splat_srv(),
             m_texture_manager.get_srv(detail_ids[0]),
             m_texture_manager.get_srv(detail_ids[1]),
@@ -2275,8 +2297,12 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
             m_texture_manager.get_normal_srv(detail_ids[1]),
             m_texture_manager.get_normal_srv(detail_ids[2]),
             m_texture_manager.get_normal_srv(detail_ids[3]),
+            m_texture_manager.get_rough_srv(detail_ids[0]),
+            m_texture_manager.get_rough_srv(detail_ids[1]),
+            m_texture_manager.get_rough_srv(detail_ids[2]),
+            m_texture_manager.get_rough_srv(detail_ids[3]),
         };
-        m_context->PSSetShaderResources(3, 9, detail_srvs);
+        m_context->PSSetShaderResources(3, 13, detail_srvs);
     }
 
     // Opaque geometry first, then blended batches far-to-near so overlapping
@@ -2326,9 +2352,10 @@ void RenderWorld::render_frame(const SharedBufferHeader& header, const SharedEnt
         draw_gizmo(header);
     }
 
-    // Unbind SRVs after forward rendering
-    ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
-    m_context->PSSetShaderResources(0, 3, nullSRVs);
+    // Unbind SRVs after forward rendering (t0..t15 covers the shadow map and the whole
+    // terrain detail block, so no stale view keeps a texture alive into the next frame).
+    ID3D11ShaderResourceView* nullSRVs[16] = {};
+    m_context->PSSetShaderResources(0, 16, nullSRVs);
 
     // 4. Render GPU Magic Particle System with Additive Blending
     m_particle_manager.render(m_context.Get(), m_constant_buffer.Get(), header.camera_pos);

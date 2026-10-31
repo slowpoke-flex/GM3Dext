@@ -16,6 +16,8 @@ struct TextureResource {
     ComPtr<ID3D11ShaderResourceView> srv;
     ComPtr<ID3D11Texture2D> normal_texture;
     ComPtr<ID3D11ShaderResourceView> normal_srv;
+    // Scalar (R8) roughness map, sampled in .r by the terrain detail blend.
+    ComPtr<ID3D11ShaderResourceView> rough_srv;
     uint32_t width = 0;
     uint32_t height = 0;
     std::string name;
@@ -43,9 +45,12 @@ public:
     bool update_texture_region(uint16_t texture_id, ID3D11DeviceContext* context, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const uint8_t* rgba_data);
     bool set_normal_map(uint16_t texture_id, ID3D11Device* device, ID3D11DeviceContext* context, uint32_t width, uint32_t height, const uint8_t* normal_rgba_data);
     bool set_normal_map_texture(uint16_t target_tex_id, uint16_t normal_tex_id);
+    // Stores a grayscale roughness map for the terrain detail blend (R channel is used).
+    bool set_roughness_map(uint16_t texture_id, ID3D11Device* device, ID3D11DeviceContext* context, uint32_t width, uint32_t height, const uint8_t* rough_rgba_data);
 
     ID3D11ShaderResourceView* get_srv(uint16_t texture_id) const;
     ID3D11ShaderResourceView* get_normal_srv(uint16_t texture_id) const;
+    ID3D11ShaderResourceView* get_rough_srv(uint16_t texture_id) const;
     ID3D11SamplerState* get_sampler() const { return m_sampler_state.Get(); }
 
     bool has_texture(uint16_t texture_id) const;
@@ -58,6 +63,9 @@ private:
     ComPtr<ID3D11SamplerState> m_sampler_state;
     ComPtr<ID3D11ShaderResourceView> m_flat_normal_srv;
     ComPtr<ID3D11Texture2D> m_flat_normal_tex;
+    // 1x1 mid-roughness fallback so a set without a roughness map samples a neutral value.
+    ComPtr<ID3D11ShaderResourceView> m_flat_rough_srv;
+    ComPtr<ID3D11Texture2D> m_flat_rough_tex;
     uint16_t m_next_custom_id = 32; // 0..13 reserved for built-ins, see BuiltinTextures.h
 };
 

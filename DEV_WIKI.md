@@ -1697,3 +1697,60 @@ Studio numbers for the scene in `tests/fixtures/meshcollider.json` (a 4 m cylind
 - A user-facing enum that the code silently clamps is worse than a missing feature: it made a cylinder look like a working mesh collider. The inspector now says "Mesh (Model)" and the tooltip states the static/dynamic rule.
 - Keep the CPU geometry next to the GPU geometry at creation time. Reconstructing it later means reading back from a GPU buffer, which needs a staging copy and only works while the mesh is still resident.
 - Trimesh colliders are one-sided unless the engine says otherwise. If the winding comes from a third party, build both sides.
+
+---
+
+## 39. Authored roughness on the terrain (2026-10-31)
+
+`tools/fetch_textures.py` had always downloaded `<Set>_Roughness.jpg`, and nothing sampled it: the terrain pinned `roughness = 0.85` in the shader. This section closes that gap and removes the last magic constant from the terrain surface.
+
+### What the maps actually say
+
+Measured over the shipped 512 px sets (mean of the R channel):
+
+| Set | Terrain layer | Roughness mean | p10 / p90 |
+|:---|:---|:---|:---|
+| Ground037 | grass/soil | 0.46 | 0.40 / 0.52 |
+| PavingStones131 | cobble | 0.50 | 0.43 / 0.58 |
+| Ground080 | sand | 0.66 | 0.62 / 0.69 |
+| Rock030 | rock | 0.69 | 0.61 / 0.76 |
+
+So the authored truth is *glossier* than the 0.85 constant: soil at 0.46 and paving at 0.50 are ordinary values for scanned ground. The constant was a safe guess, not a measurement.
+
+### Implementation
+
+`TextureManager` stores roughness as an R8 texture with a mip chain (`CreateRoughnessSRV`) instead of an RGBA copy - four of these are sampled per terrain pixel, and the map is one channel of linear data. A 1x1 fallback at 0.85 (`m_flat_rough_srv`) covers sets shipped without a map, so the shader never has to branch. `load_builtin_texture_sets` logs how many sets came with one.
+
+The pixel shader blends the four maps with the same splat weights as albedo and normal:
+
+```hlsl
+float roughDetail = DetailGrassR.Sample(TextureSampler, uvTop).r * w.x
+                  + DetailRockR.Sample(TextureSampler, uvTop).r * w.y
+                  + DetailSandR.Sample(TextureSampler, uvTop).r * w.z
+                  + DetailCobbleR.Sample(TextureSampler, uvTop).r * w.w;
+terrainRoughness = lerp(0.85, clamp(roughDetail, 0.30, 1.0), detailFade);
+```
+
+Two deliberate simplifications:
+
+- **Top projection only.** Roughness is a scalar; on a grayscale map the smear of a side projection is invisible, so cliffs do not pay another four fetches.
+- **0.30 floor.** The smoothest texels of a photograph are dark rock at ~0.21; letting the ground reach that would put a mirror under the sun at grazing angles, which is exactly the regime that produced the section 37 artefacts.
+
+The blend uses the existing `detailFade` (10 m to 35 m), so beyond that range the terrain is back to the single 0.85 constant and the far surface stays free of per-pixel specular noise.
+
+### The gate that came with it
+
+While editing the block it became obvious the whole detail path ran on *every* terrain pixel: four albedo taps, four normal taps, and on steep ground eight more, all multiplied by a fade that was already zero past 35 m. In a landscape view most of the screen is that far away, so those fetches were pure waste. The block is now behind `if (detailFade > 0.001)`, which makes the near field pay for the new roughness taps and the far field pay for none of them. A 40-frame capture of the same camera before and after is identical apart from grass wind (measured: same build twice differs by mean 0.29/255, the refactor by 0.27/255).
+
+### Verification
+
+- Near meadow and cobble plaza captured before/after: the plaza stones pick up a restrained sheen, the meadow stays matte under the grass, no speckles at 4x zoom on the ground.
+- Diff against a build that forces `terrainRoughness = 0.85`: 10.85% of pixels change by more than 2/255, mean 1.5/255. Subtle by design - it is a specular response on a matte surface, not a colour change.
+- Camera-shift test (10 cm) on the ground with grass off: no new high-frequency sparkle, so the maps did not bring back section 37.
+- Loader: `[TextureManager] Loaded 7 CC0 PBR texture sets ... (7 with roughness maps)`.
+
+### Lessons
+
+- A fetch script that downloads data nobody samples is a trap: it looks like the feature exists. Both `fetch_textures.py` and the loader now agree on what is used.
+- Authored maps frequently disagree with the safe constant. Here the constant was 0.85 and the photographs say 0.46-0.69; trusting the data made the plaza read as stone instead of paint.
+- If you add fetches to an already-faded path, check whether the path has a distance gate at all. It did not, and the gate pays for the new samples several times over.

@@ -44,6 +44,22 @@ bool TextureManager::init(ID3D11Device* device, ID3D11DeviceContext* context) {
         device->CreateShaderResourceView(m_flat_normal_tex.Get(), nullptr, m_flat_normal_srv.GetAddressOf());
     }
 
+    // 2b. Default flat roughness (1x1, mid value): a texture set may ship without a map,
+    //     and the terrain blend must still sample something neutral.
+    uint8_t flat_rough_bytes[1] = { 216 }; // ~0.85, the terrain's matte default
+    D3D11_TEXTURE2D_DESC frd{};
+    frd.Width = 1; frd.Height = 1; frd.MipLevels = 1; frd.ArraySize = 1;
+    frd.Format = DXGI_FORMAT_R8_UNORM;
+    frd.SampleDesc.Count = 1;
+    frd.Usage = D3D11_USAGE_IMMUTABLE;
+    frd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA frData{};
+    frData.pSysMem = flat_rough_bytes;
+    frData.SysMemPitch = 1;
+    if (SUCCEEDED(device->CreateTexture2D(&frd, &frData, m_flat_rough_tex.GetAddressOf()))) {
+        device->CreateShaderResourceView(m_flat_rough_tex.Get(), nullptr, m_flat_rough_srv.GetAddressOf());
+    }
+
     // 3. Generate Built-in Procedural Textures (IDs 0..4)
     create_procedural_textures(device, context);
 
@@ -61,6 +77,8 @@ void TextureManager::cleanup() {
     m_sampler_state.Reset();
     m_flat_normal_srv.Reset();
     m_flat_normal_tex.Reset();
+    m_flat_rough_srv.Reset();
+    m_flat_rough_tex.Reset();
     m_next_custom_id = 6;
 }
 
@@ -82,6 +100,46 @@ static ComPtr<ID3D11ShaderResourceView> CreateNormalMapSRV(ID3D11Device* device,
     if (FAILED(device->CreateTexture2D(&desc, nullptr, tex.GetAddressOf()))) return nullptr;
 
     context->UpdateSubresource(tex.Get(), 0, nullptr, normal_rgba, width * 4, 0);
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format = desc.Format;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = -1;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+
+    ComPtr<ID3D11ShaderResourceView> srv;
+    if (FAILED(device->CreateShaderResourceView(tex.Get(), &srvDesc, srv.GetAddressOf()))) return nullptr;
+
+    context->GenerateMips(srv.Get());
+    return srv;
+}
+
+// Roughness is a single channel of linear data, so it is stored as R8 with a mip chain.
+// Keeping it 8-bit/half a megabyte instead of an RGBA copy matters when four of these are
+// sampled in the terrain detail blend on every pixel.
+static ComPtr<ID3D11ShaderResourceView> CreateRoughnessSRV(ID3D11Device* device, ID3D11DeviceContext* context,
+                                                           uint32_t width, uint32_t height,
+                                                           const uint8_t* rough_rgba) {
+    if (!device || !context || !rough_rgba || width == 0 || height == 0) return nullptr;
+
+    std::vector<uint8_t> red(static_cast<size_t>(width) * height);
+    for (size_t i = 0; i < red.size(); ++i) red[i] = rough_rgba[i * 4];
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 0; // Full mip chain
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+
+    ComPtr<ID3D11Texture2D> tex;
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, tex.GetAddressOf()))) return nullptr;
+
+    context->UpdateSubresource(tex.Get(), 0, nullptr, red.data(), width, 0);
 
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = desc.Format;
@@ -737,6 +795,7 @@ uint32_t TextureManager::load_builtin_texture_sets(ID3D11Device* device, ID3D11D
     };
 
     uint32_t loaded = 0;
+    uint32_t rough_loaded = 0;
     for (const SetDesc& set : kSets) {
         const std::string base = dir + "\\" + set.folder + "\\" + set.folder;
         uint32_t w = 0, h = 0;
@@ -754,11 +813,20 @@ uint32_t TextureManager::load_builtin_texture_sets(ID3D11Device* device, ID3D11D
             std::vector<uint8_t> generated = GenerateSobelNormalMap(w, h, albedo.data(), 2.2f);
             set_normal_map(set.id, device, context, w, h, generated.data());
         }
+
+        // Authored roughness, if the set was fetched with it. Terrain blends these per layer;
+        // without one the layer samples the neutral 0.85 fallback.
+        std::vector<uint8_t> rough;
+        uint32_t rw = 0, rh = 0;
+        if (decode_image_rgba(base + "_Roughness.jpg", rw, rh, rough)) {
+            if (set_roughness_map(set.id, device, context, rw, rh, rough.data())) ++rough_loaded;
+        }
         ++loaded;
     }
 
     if (loaded > 0) {
-        std::cout << "[TextureManager] Loaded " << loaded << " CC0 PBR texture sets from " << dir << "\n";
+        std::cout << "[TextureManager] Loaded " << loaded << " CC0 PBR texture sets from " << dir
+                  << " (" << rough_loaded << " with roughness maps)\n";
     }
     return loaded;
 }
@@ -779,6 +847,21 @@ ID3D11ShaderResourceView* TextureManager::get_normal_srv(uint16_t texture_id) co
         return it->second.normal_srv.Get();
     }
     return m_flat_normal_srv.Get();
+}
+
+ID3D11ShaderResourceView* TextureManager::get_rough_srv(uint16_t texture_id) const {
+    auto it = m_textures.find(texture_id);
+    if (it != m_textures.end() && it->second.rough_srv) {
+        return it->second.rough_srv.Get();
+    }
+    return m_flat_rough_srv.Get();
+}
+
+bool TextureManager::set_roughness_map(uint16_t texture_id, ID3D11Device* device, ID3D11DeviceContext* context, uint32_t width, uint32_t height, const uint8_t* rough_rgba_data) {
+    auto it = m_textures.find(texture_id);
+    if (it == m_textures.end()) return false;
+    it->second.rough_srv = CreateRoughnessSRV(device, context, width, height, rough_rgba_data);
+    return it->second.rough_srv != nullptr;
 }
 
 bool TextureManager::set_normal_map(uint16_t texture_id, ID3D11Device* device, ID3D11DeviceContext* context, uint32_t width, uint32_t height, const uint8_t* normal_rgba_data) {
