@@ -44,6 +44,8 @@ python tools\fetch_textures.py --force    # re-extract everything
 
 The script needs `urllib` and Pillow, caches the source zips in `scratch/texture_cache/` (gitignored) and rewrites `CREDITS.md`. It downloads `_Color`, `_NormalGL` and `_Roughness` only; AO and displacement are dropped because the shader does not sample them.
 
+All three are used: albedo and normal by the material shader, roughness by the terrain detail blend (`DetailGrassR..DetailCobbleR`, t12..t15). The engine logs how many sets came with a roughness map:
+
 At runtime `TextureManager::find_asset_dir` resolves the folder in this order:
 
 1. `%GM3D_ASSET_DIR%` (absolute override, useful for a packaged game)
