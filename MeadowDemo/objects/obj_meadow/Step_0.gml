@@ -1,10 +1,12 @@
 var _dt = delta_time / 1000000.0;
 if (_dt > 0.1) _dt = 0.1;   // a hitch must not teleport the character
 
+var _desired = char_yaw;     // facing target; the body keeps its heading unless told otherwise
+
 // ---------------------------------------------------------------------------------------------
 // Camera + controller, modelled on WoW's default bindings:
 //   W/S forward and backpedal, A/D and Q/E strafe, Shift runs, Space jumps,
-//   right mouse turns camera *and* character (cursor captured and recentred),
+//   right mouse turns camera *and* character (cursor captured),
 //   wheel zooms, and the body keeps facing the camera while strafing or backing up.
 // ---------------------------------------------------------------------------------------------
 if (keyboard_check_pressed(ord("1"))) {
@@ -24,25 +26,25 @@ if (follow && instance_exists(player)) {
     // cursor every frame only works if the warp really lands where we asked, and when it does
     // not (scaled window, lost focus) the residual offset turns into a constant spin. The
     // cursor is only pushed back when it reaches the edge, where deltas would stop.
-    var _mx = window_mouse_get_x();
-    var _my = window_mouse_get_y();
+    var _cur_x = window_mouse_get_x();
+    var _cur_y = window_mouse_get_y();
 
     if (mouse_check_button_pressed(mb_right)) {
         mouse_free = false;
         window_set_cursor(cr_none);
-        mouse_prev_x = _mx;
-        mouse_prev_y = _my;
+        mouse_prev_x = _cur_x;
+        mouse_prev_y = _cur_y;
     }
 
     if (!mouse_free && mouse_check_button(mb_right) && window_has_focus()) {
-        var _dx = _mx - mouse_prev_x;
-        var _dy = _my - mouse_prev_y;
+        var _dx = _cur_x - mouse_prev_x;
+        var _dy = _cur_y - mouse_prev_y;
         cam_yaw += _dx * 0.22;                                // mouse right turns right
         cam_pitch = clamp(cam_pitch + _dy * 0.18, -20, 60);   // mouse up (dy < 0) tilts the view up
-        mouse_prev_x = _mx;
-        mouse_prev_y = _my;
+        mouse_prev_x = _cur_x;
+        mouse_prev_y = _cur_y;
 
-        if (_mx < 48 || _mx > _win_w - 48 || _my < 48 || _my > _win_h - 48) {
+        if (_cur_x < 48 || _cur_x > _win_w - 48 || _cur_y < 48 || _cur_y > _win_h - 48) {
             window_mouse_set(_cx, _cy);
             mouse_prev_x = _cx;
             mouse_prev_y = _cy;
@@ -66,13 +68,13 @@ if (follow && instance_exists(player)) {
     var _fx = sin(_yaw), _fz = cos(_yaw);
     var _rx = cos(_yaw), _rz = -sin(_yaw);
 
-    var _mx = _fx * _fwd + _rx * _strafe;
-    var _mz = _fz * _fwd + _rz * _strafe;
-    var _len = point_distance(0, 0, _mx, _mz);
+    var _vx = _fx * _fwd + _rx * _strafe;
+    var _vz = _fz * _fwd + _rz * _strafe;
+    var _len = point_distance(0, 0, _vx, _vz);
     var _moving = _len > 0.001;
     if (_moving) {
-        _mx /= _len;
-        _mz /= _len;
+        _vx /= _len;
+        _vz /= _len;
     }
 
     var _target = 0;
@@ -80,16 +82,25 @@ if (follow && instance_exists(player)) {
     move_speed += (_target - move_speed) * min(1, 14 * _dt);
 
     if (_moving) {
-        player.x += _mx * move_speed * _dt;
-        player.z += _mz * move_speed * _dt;
+        player.x += _vx * move_speed * _dt;
+        player.z += _vz * move_speed * _dt;
     }
 
     // --- facing -------------------------------------------------------------------------
-    // Forward+strafe faces the diagonal; backpedal and pure strafe keep the body pointing
-    // where the camera looks, so the character slides sideways instead of turning.
-    var _desired = cam_yaw;
-    if (_moving && _fwd > 0) _desired = darctan2(_mx, _mz);
-    char_yaw += clamp(angle_difference(char_yaw, _desired), -720 * _dt, 720 * _dt);
+    // WoW rules: forward+strafe faces the diagonal, pure strafe keeps the body on the camera
+    // heading, backpedal keeps it forward, and stopping leaves the body facing where it went.
+    // Only the right mouse button swings the body round while standing still.
+    if (_moving) {
+        _desired = (_fwd > 0) ? darctan2(_vx, _vz) : cam_yaw;
+    }
+    if (!mouse_free) _desired = cam_yaw;
+
+    // NB: GameMaker's angle_difference(a, b) returns a - b (the delta FROM b TO a), not the
+    // delta from a to b. Passing (char_yaw, _desired) here makes the body chase its target in
+    // the wrong direction and spin 360 degrees over and over - the shake seen on W+D.
+    var _turn = 720 * _dt;
+    var _diff = angle_difference(_desired, char_yaw);
+    char_yaw += (_diff > _turn) ? _turn : ((_diff < -_turn) ? -_turn : _diff);
 
     var _half = degtorad(char_yaw) * 0.5;
     player.qx = 0;
