@@ -44,3 +44,5 @@ scratch/
 
 # Local agent tooling (screenshots, GUI automation scripts)
 .agents/skills/antigravity-computer-use/
+# local agent config with machine paths (removed from history before publishing)
+opencode.json

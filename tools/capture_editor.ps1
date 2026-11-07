@@ -78,11 +78,11 @@ Write-Output "Editor is running. Capturing screenshot..."
 
 # List windows
 Write-Output "--- Desktop Windows ---"
-& powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\windows.ps1"
+& powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\windows.ps1"
 
 # Capture screenshot
 Write-Output "--- Capturing Screenshot ---"
-& powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -Path $ScreenshotPath
+& powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -Path $ScreenshotPath
 
 if (-not $KeepRunning) {
     Write-Output "Stopping test instance PID $studioPid..."

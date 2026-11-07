@@ -29,10 +29,10 @@ if (Test-Path $logPath) {
 
 # Take screenshot
 $screenshotPath = "C:\GM3Dext\build\studio_screen.png"
-& powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -Path $screenshotPath
+& powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -Path $screenshotPath
 
 # Check window list
-& powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\windows.ps1"
+& powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\windows.ps1"
 
 # Leave running or kill for test
 Write-Output "Test script done. Killing test instance..."

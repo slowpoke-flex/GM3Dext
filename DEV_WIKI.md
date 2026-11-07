@@ -2004,7 +2004,7 @@ with (obj_3d_entity) { ...GM3D_HEADER_SIZE + _idx * GM3D_ENTITY_SIZE... _idx++; 
 
 ```
 --runtime-root   C:/ProgramData/GameMakerStudio2-LTS2026/Cache/runtimes/runtime-2026.0.0.23
---user-directory %USERPROFILE%/AppData/Roaming/GameMakerStudio2-LTS2026/<account>_<id>
+--user-directory %APPDATA%/GameMakerStudio2-LTS2026/<account>_<id>
 ```
 
 `%APPDATA%\GameMakerStudio2-LTS2026` itself has `um.json` but no licence; the plist lives in

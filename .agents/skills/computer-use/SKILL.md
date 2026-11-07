@@ -15,7 +15,7 @@ This skill provides native Windows desktop automation tools for taking screensho
 ## Helper Scripts
 
 All scripts are located in:
-`%USERPROFILE%\.gemini\config\skills\computer-use\scripts\`
+`$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\`
 
 ### 1. Capture Screenshots (`screenshot.ps1`)
 
@@ -23,10 +23,10 @@ Captures the interactive desktop or crops directly to a target application windo
 
 ```powershell
 # Full desktop screenshot
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -Path "C:\path\to\capture.png"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -Path "C:\path\to\capture.png"
 
 # Specific window screenshot by title substring
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -WindowTitle "GM3D Studio" -Path "C:\path\to\studio.png"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\screenshot.ps1" -WindowTitle "GM3D Studio" -Path "C:\path\to\studio.png"
 ```
 
 After capturing, use the `read_file` tool to inspect the image.
@@ -39,13 +39,13 @@ Lists all visible desktop windows with their HWND, Process ID, coordinates, dime
 
 ```powershell
 # List all visible desktop windows
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\windows.ps1" -Action list
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\windows.ps1" -Action list
 
 # Filter list by title substring
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\windows.ps1" -Action list -Title "GameMaker"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\windows.ps1" -Action list -Title "GameMaker"
 
 # Bring a window to the foreground and focus it
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\windows.ps1" -Action focus -Title "GM3D Studio"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\windows.ps1" -Action focus -Title "GM3D Studio"
 ```
 
 ---
@@ -56,22 +56,22 @@ Moves the mouse, clicks (left, right, double), drags, or queries current cursor 
 
 ```powershell
 # Get current cursor coordinates
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action getpos
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action getpos
 
 # Move cursor
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action move -X 500 -Y 300
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action move -X 500 -Y 300
 
 # Left click at coordinates
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action click -X 500 -Y 300
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action click -X 500 -Y 300
 
 # Right click
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action rightclick -X 500 -Y 300
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action rightclick -X 500 -Y 300
 
 # Double click
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action doubleclick -X 500 -Y 300
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action doubleclick -X 500 -Y 300
 
 # Drag and drop
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action drag -X 200 -Y 200 -EndX 600 -EndY 400
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\mouse.ps1" -Action drag -X 200 -Y 200 -EndX 600 -EndY 400
 ```
 
 ---
@@ -82,14 +82,14 @@ Types plain text or sends key combinations (using .NET SendKeys format):
 
 ```powershell
 # Type plain text into active window
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\keyboard.ps1" -Text "MyScene"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\keyboard.ps1" -Text "MyScene"
 
 # Focus target window and send hotkey (e.g. Ctrl+S to save)
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\keyboard.ps1" -TargetTitle "GM3D Studio" -Keys "^s"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\keyboard.ps1" -TargetTitle "GM3D Studio" -Keys "^s"
 
 # Send Play simulation toggle (P) or common hotkeys:
 # Enter: "{ENTER}", Esc: "{ESC}", Tab: "{TAB}", Alt+F4: "%{F4}", F5: "{F5}"
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.gemini\config\skills\computer-use\scripts\keyboard.ps1" -Keys "{ENTER}"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.gemini\config\skills\computer-use\scripts\keyboard.ps1" -Keys "{ENTER}"
 ```
 
 ---
