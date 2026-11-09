@@ -1,4 +1,4 @@
-# GM3Dext: High-Performance 3D Engine & Studio for GameMaker
+# GM3Dext: 3D Extension and World Editor for GameMaker
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language: C++20](https://img.shields.io/badge/Language-C%2B%2B20-00599C.svg)](https://en.wikipedia.org/wiki/C%2B%2B20)
@@ -6,35 +6,39 @@
 [![Physics: Jolt Physics](https://img.shields.io/badge/Physics-Jolt%20Physics-orange.svg)](https://github.com/jrouwe/JoltPhysics)
 [![Target: GameMaker LTS](https://img.shields.io/badge/Target-GameMaker%20LTS-brightgreen.svg)](https://gamemaker.io/)
 
-**GM3Dext** is a native 3D engine and standalone world editor for **GameMaker LTS**. It ships as two binaries built from one C++20 core: `GM3Dext.dll` (a C-ABI extension called from GML) and `GM3DStudio.exe` (a Dear ImGui editor that authors the scenes the extension plays back).
+**GM3Dext** is an open-source 3D extension and standalone world editor for **GameMaker LTS**. It is intended for developers who want to create 3D scenes and use them in a GameMaker project on Windows. The project combines a GameMaker 3D extension with a level editor and a DirectX 11 renderer.
 
-## Key architectural features
+The project consists of a C++20 core and two main components: `GM3Dext.dll`, a native extension called from GML, and `GM3DStudio.exe`, an editor for creating scenes and exporting them for use with the extension.
 
-- **Zero-copy shared memory protocol**: GameMaker allocates one contiguous byte buffer. Transforms, camera state and instance data travel between GML and the engine through that buffer, with no marshalling and no per-frame VM calls.
+**Project status:** GM3Dext is under development. Some features and the GameMaker integration have limitations, and the workflow may require manual setup. See [Known limitations](#known-limitations) and the [Studio guide](docs/STUDIO_GUIDE.md) before using it in a project. Feedback and issue reports are welcome.
+
+## Features
+
+- **Shared buffer**: GameMaker allocates a contiguous byte buffer used to pass transforms, camera state and instance data to the engine.
 - **DirectX 11 PBR pipeline**:
   - Cook-Torrance microfacet BRDF with base colour, roughness, metallic, emissive and normal mapping.
   - Directional sun shadows: 2-cascade CSM plus a 6-face omnidirectional point-light atlas, filtered with a rotated Vogel-disk PCF kernel.
   - HDR bloom (bright-pass, two-pass Gaussian blur) and ACES filmic tonemapping.
   - Procedural sky dome with a radiant sun disk, height-aware exponential fog.
   - Instanced batching grouped by `(mesh_id, material_id, texture_id)`.
-- **Jolt Physics**: multi-threaded rigid bodies with box, sphere, capsule, cylinder and convex-hull shapes, a heightfield terrain collider, raycasts, and fixed-timestep interpolation for stutter-free motion at high refresh rates.
+- **Jolt Physics**: multi-threaded rigid bodies with box, sphere, capsule, cylinder and convex-hull shapes, a heightfield terrain collider, raycasts, and fixed-timestep interpolation.
 - **Skeletal animation**: hardware GPU skinning, multi-track interpolation, up to 128 joints per skin.
 - **Procedural content**: multi-biome terrain with splat mapping and a sculpting brush, procedural pine trees, and an instanced grass/foliage system with wind sway, subsurface scattering and a painting brush.
 - **Photographic CC0 materials**: seven PBR sets (albedo + normal, from [ambientCG](https://ambientcg.com), CC0 1.0) used as the built-in material palette and as the tiled terrain detail layers. The engine falls back to procedural textures when the `assets/textures` folder is absent.
-- **GameMaker integration**: 59 exported functions, a `--log`-friendly C ABI, and a GML loader generator that the Studio emits alongside the scene.
+- **GameMaker integration**: a native C ABI and a generated GML loader for exported scenes. Some DLL functions are not yet registered for use from GML; see [Known limitations](#known-limitations).
 
 ## GM3D Studio
 
-- Full DCC-style docking layout: viewport, hierarchy, inspector, materials, environment, status bar.
-- True parent-child transform hierarchy with world-transform-preserving reparenting and cycle guards.
+- Docking layout: viewport, hierarchy, inspector, materials, environment, status bar.
+- Parent-child transform hierarchy with world-transform-preserving reparenting and cycle guards.
 - Multi-selection, grouping (`Ctrl+G`), alignment, surface snapping (`G`), recursive duplication (`Ctrl+D`) and multi-level undo/redo.
 - PBR material editor with a live Cook-Torrance preview sphere, texture slots, UV tiling/offset and alpha modes.
 - glTF 2.0 / GLB / OBJ import with automatic material extraction and diagnostic reporting.
-- Terrain generation, raise/lower/smooth/flatten brushes, PFM heightmap import/export, and a Unity-style foliage painting brush.
-- Resilient asset library with thumbnails, category filters and one-click relinking of moved files.
+- Terrain generation, raise/lower/smooth/flatten brushes, PFM heightmap import/export, and a foliage painting brush.
+- Asset library with thumbnails, category filters and one-click relinking of moved files.
 - GameMaker LTS exporter: writes the scene JSON, the GML loader and staged assets into a project folder.
 
-`docs/STUDIO_GUIDE.md` walks the whole authoring loop: which settings live in the Studio, what
+[The Studio guide](docs/STUDIO_GUIDE.md) describes the authoring workflow: which settings live in the Studio, what
 the export contains, what has to be wired in GameMaker (extension, scripts, datafiles, entity
 buffer, `update_framework`), and the failure modes in between.
 
@@ -47,7 +51,7 @@ buffer, `update_framework`), and the failure modes in between.
 - Windows 10 / 11 SDK (Direct3D 11, DXGI, D3DCompiler)
 - CMake 3.20+ and Ninja
 
-### Fast build
+### Build
 
 ```cmd
 build.bat
@@ -88,7 +92,7 @@ ctest --test-dir build --output-on-failure
 
 ## Using the extension from GameMaker
 
-The extension exports a `__cdecl` C ABI whose arguments and return values are `double` (or raw pointers for buffers and strings):
+The following snippets illustrate some extension calls; they are not a complete setup. See the [Studio guide](docs/STUDIO_GUIDE.md) for the required GameMaker project setup. The extension exports a `__cdecl` C ABI whose arguments and return values are `double` (or raw pointers for buffers and strings):
 
 ```gml
 // Initialize the engine with the shared buffer and the game window handle
@@ -111,11 +115,11 @@ The canonical list of exports is `src/dllmain.cpp`; function registration for Ga
 
 ## Known limitations
 
+- Windows with Direct3D 11 only. There is no Direct3D 12, Vulkan or cross-platform backend.
 - The grass API (`grass_*`) and `material_clear_all` exist in the DLL but are not yet registered in `GM3Dext.yy`, so GML cannot call them.
 - Mesh colliders are not implemented; the editor simulates them with a cylinder proxy and reports this in diagnostics.
 - Skins with more than 128 joints are rejected, and glTF morph targets are not supported.
 - External dependencies referenced by a `.gltf` are not packaged by the exporter; use a self-contained `.glb`.
-- Windows with Direct3D 11 only. There is no Direct3D 12, Vulkan or cross-platform backend.
 
 ## Trademark disclaimer and license
 
